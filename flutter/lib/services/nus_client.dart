@@ -68,6 +68,11 @@ class NusClient {
   StreamController<List<BleDevice>>? _scanController;
   Timer? _scanTimer;
   final Map<String, BleDevice> _scanResults = {};
+  final Set<String> _seenDeviceIds = {};
+
+  /// Number of distinct BLE peripherals reported by the operating system in
+  /// the current scan, including devices that do not look like the controller.
+  int get seenDeviceCount => _seenDeviceIds.length;
 
   /// Streams matching peripherals until [timeout] expires or [stopScan] is
   /// called. Devices are filtered in Dart so name-based discovery still works
@@ -82,15 +87,23 @@ class NusClient {
     final controller = StreamController<List<BleDevice>>();
     _scanController = controller;
     _scanResults.clear();
+    _seenDeviceIds.clear();
+
+    void addDevice(BleDevice device) {
+      final firstSighting = _seenDeviceIds.add(device.deviceId);
+      if (_looksLikeDevice(device)) {
+        _scanResults[device.deviceId] = device;
+      } else if (!firstSighting) {
+        return;
+      }
+
+      final results = _scanResults.values.toList()
+        ..sort((a, b) => (b.rssi ?? -999).compareTo(a.rssi ?? -999));
+      if (!controller.isClosed) controller.add(results);
+    }
 
     _scanSub = UniversalBle.scanStream.listen(
-      (device) {
-        if (!_looksLikeDevice(device)) return;
-        _scanResults[device.deviceId] = device;
-        final results = _scanResults.values.toList()
-          ..sort((a, b) => (b.rssi ?? -999).compareTo(a.rssi ?? -999));
-        if (!controller.isClosed) controller.add(results);
-      },
+      addDevice,
       onError: (Object error, StackTrace stackTrace) {
         if (!controller.isClosed) controller.addError(error, stackTrace);
         unawaited(stopScan());
@@ -98,6 +111,23 @@ class NusClient {
     );
 
     try {
+      // On Windows, a peripheral that is already connected through a previous
+      // session or another application is omitted from advertisement scan
+      // results. Universal BLE exposes those devices through this separate
+      // system-device query.
+      if (Platform.isWindows) {
+        try {
+          final systemDevices = await UniversalBle.getSystemDevices(
+            withServices: const [NusUuids.service],
+          );
+          for (final device in systemDevices) {
+            addDevice(device);
+          }
+        } catch (_) {
+          // A normal advertisement scan can still discover the controller.
+        }
+      }
+
       await UniversalBle.startScan(
         platformConfig: Platform.isAndroid
             ? PlatformConfig(

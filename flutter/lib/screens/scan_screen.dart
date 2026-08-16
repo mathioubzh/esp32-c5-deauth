@@ -29,6 +29,7 @@ class _ScanScreenState extends State<ScanScreen> {
   bool _scanning = false;
   bool _connecting = false;
   bool _rescanEnabled = true;
+  int _seenDeviceCount = 0;
   Timer? _rescanTimer;
   String? _error;
 
@@ -123,6 +124,7 @@ class _ScanScreenState extends State<ScanScreen> {
     setState(() {
       _error = null;
       _results = [];
+      _seenDeviceCount = 0;
       _scanning = true;
     });
 
@@ -135,7 +137,10 @@ class _ScanScreenState extends State<ScanScreen> {
       _resultsSub = stream.listen(
         (devices) {
           if (!mounted) return;
-          setState(() => _results = devices);
+          setState(() {
+            _results = devices;
+            _seenDeviceCount = _client.seenDeviceCount;
+          });
           if (devices.length == 1 && !_connecting) {
             unawaited(_connect(devices.first));
           }
@@ -285,9 +290,26 @@ class _ScanScreenState extends State<ScanScreen> {
           Expanded(
             child: _results.isEmpty
                 ? Center(
-                    child: Text(
-                      _scanning ? 'Scanning…' : 'No devices found',
-                      style: Theme.of(context).textTheme.bodyMedium,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _scanning ? 'Scanning…' : 'No controller found',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'BLE devices seen by Windows: $_seenDeviceCount',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (!_scanning && _seenDeviceCount > 0) ...[
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Power-cycle the ESP32-C5 and scan again.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ],
                     ),
                   )
                 : ListView.separated(
@@ -309,7 +331,10 @@ class _ScanScreenState extends State<ScanScreen> {
     return ListTile(
       leading: const Icon(Icons.bluetooth),
       title: Text(name),
-      subtitle: Text('${device.deviceId}\n${device.rssi ?? '?'} dBm'),
+      subtitle: Text(
+        '${device.deviceId}\n${device.rssi ?? '?'} dBm'
+        '${device.isSystemDevice == true ? ' · Windows system device' : ''}',
+      ),
       isThreeLine: true,
       onTap: () => unawaited(_connect(device)),
     );
