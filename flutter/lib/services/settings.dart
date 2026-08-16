@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,17 +8,39 @@ class Settings extends ChangeNotifier {
   static const _defaultPort = 7331;
 
   int _apiPort = _defaultPort;
-  bool _apiEnabled = true;
+  bool _apiEnabled;
 
   int get apiPort => _apiPort;
   bool get apiEnabled => _apiEnabled;
 
-  late final File _file;
+  final File _file;
 
-  Settings() {
-    final home = Platform.environment['HOME'] ?? '.';
-    _file = File('$home/.config/deauther/settings.json');
-    _load();
+  Settings({File? file})
+    : _apiEnabled = true,
+      _file = file ?? File(_defaultSettingsPath()) {
+    unawaited(_load());
+  }
+
+  @visibleForTesting
+  Settings.forTesting({bool apiEnabled = false})
+    : _apiEnabled = apiEnabled,
+      _file = File('settings.test.json');
+
+  static String _defaultSettingsPath() {
+    final environment = Platform.environment;
+    final separator = Platform.pathSeparator;
+
+    if (Platform.isWindows) {
+      final base = environment['APPDATA'] ?? environment['LOCALAPPDATA'] ?? '.';
+      return '$base${separator}ESP32-C5 Deauther'
+          '${separator}settings.json';
+    }
+
+    final home = environment['HOME'];
+    final base =
+        environment['XDG_CONFIG_HOME'] ??
+        (home == null || home.isEmpty ? '.' : '$home$separator.config');
+    return '$base${separator}deauther${separator}settings.json';
   }
 
   Future<void> _load() async {
@@ -33,7 +56,8 @@ class Settings extends ChangeNotifier {
   Future<void> _save() async {
     await _file.parent.create(recursive: true);
     await _file.writeAsString(
-        jsonEncode({'apiPort': _apiPort, 'apiEnabled': _apiEnabled}));
+      jsonEncode({'apiPort': _apiPort, 'apiEnabled': _apiEnabled}),
+    );
   }
 
   Future<void> setApiPort(int port) async {

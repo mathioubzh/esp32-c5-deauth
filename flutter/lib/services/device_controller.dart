@@ -47,7 +47,8 @@ class DeviceController extends ChangeNotifier {
   bool get scanIsStale {
     if (aps.isEmpty) return true;
     if (_lastScanTime == null) return true;
-    return DateTime.now().difference(_lastScanTime!) > const Duration(minutes: 5);
+    return DateTime.now().difference(_lastScanTime!) >
+        const Duration(minutes: 5);
   }
 
   // Parse state
@@ -61,20 +62,24 @@ class DeviceController extends ChangeNotifier {
   bool _inStas = false;
   final List<StaEntry> _tmpStations = [];
 
-  static final _reNuke    = RegExp(r'^nuke: (\d+)s\s+aps=(\d+)\s+pkts=(\d+)');
-  static final _reAttack  = RegExp(r'^attack: (\d+)s\s+aps=(\d+)');
+  static final _reNuke = RegExp(r'^nuke: (\d+)s\s+aps=(\d+)\s+pkts=(\d+)');
+  static final _reAttack = RegExp(r'^attack: (\d+)s\s+aps=(\d+)');
   static final _reSelLine = RegExp(r'^sel:([ \d]*)$');
   static final _reSelToggle = RegExp(r'^sel: (\d+) (on|off)$');
   static final _reAp = RegExp(
-      r'^\s*(\d+)\s+(\d+)\s+(2\.4GHz|5GHz)\s+(-?\d+)\s+'
-      r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(.*?)\s*$');
+    r'^\s*(\d+)\s+(\d+)\s+(2\.4GHz|5GHz)\s+(-?\d+)\s+'
+    r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(.*?)\s*$',
+  );
   static final _reWl = RegExp(
-      r'^wl\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(auto|bssid|sta)');
+    r'^wl\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(auto|bssid|sta)',
+  );
   static final _reBl = RegExp(
-      r'^bl\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(auto|bssid|sta)');
+    r'^bl\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(auto|bssid|sta)',
+  );
   static final _reMode = RegExp(r'^mode: (\w+)$');
   static final _reStaLine = RegExp(
-      r'^sta:\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');
+    r'^sta:\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})',
+  );
 
   void _onChunk(String chunk) {
     rawLog += chunk;
@@ -131,14 +136,16 @@ class DeviceController extends ChangeNotifier {
     if (_inAps) {
       final m = _reAp.firstMatch(line);
       if (m != null) {
-        _tmpAps.add(ApEntry(
-          idx: int.parse(m.group(1)!),
-          channel: int.parse(m.group(2)!),
-          is5ghz: m.group(3) == '5GHz',
-          rssi: int.parse(m.group(4)!),
-          bssid: m.group(5)!.toUpperCase(),
-          ssid: m.group(6)!,
-        ));
+        _tmpAps.add(
+          ApEntry(
+            idx: int.parse(m.group(1)!),
+            channel: int.parse(m.group(2)!),
+            is5ghz: m.group(3) == '5GHz',
+            rssi: int.parse(m.group(4)!),
+            bssid: m.group(5)!.toUpperCase(),
+            ssid: m.group(6)!,
+          ),
+        );
         return;
       }
       _commitAps();
@@ -147,7 +154,10 @@ class DeviceController extends ChangeNotifier {
     // WL row
     final wm = _reWl.firstMatch(line);
     if (wm != null) {
-      if (!_inWl) { _tmpWl.clear(); _inWl = true; }
+      if (!_inWl) {
+        _tmpWl.clear();
+        _inWl = true;
+      }
       _tmpWl.add(AclEntry(mac: wm.group(1)!.toUpperCase(), kind: wm.group(2)!));
       return;
     }
@@ -155,32 +165,58 @@ class DeviceController extends ChangeNotifier {
     // BL row
     final bm = _reBl.firstMatch(line);
     if (bm != null) {
-      if (!_inBl) { _tmpBl.clear(); _inBl = true; }
+      if (!_inBl) {
+        _tmpBl.clear();
+        _inBl = true;
+      }
       _tmpBl.add(AclEntry(mac: bm.group(1)!.toUpperCase(), kind: bm.group(2)!));
       return;
     }
 
     // Empty list sentinels
-    if (line == '(wl empty)') { _tmpWl.clear(); _commitWl(); return; }
-    if (line == '(bl empty)') { _tmpBl.clear(); _commitBl(); return; }
+    if (line == '(wl empty)') {
+      _tmpWl.clear();
+      _commitWl();
+      return;
+    }
+    if (line == '(bl empty)') {
+      _tmpBl.clear();
+      _commitBl();
+      return;
+    }
 
     // STA machine-readable rows: "sta: MAC RSSI CH BSSID"
     final sm = _reStaLine.firstMatch(line);
     if (sm != null) {
-      if (!_inStas) { _tmpStations.clear(); _inStas = true; }
-      _tmpStations.add(StaEntry(
-        mac:     sm.group(1)!.toUpperCase(),
-        rssi:    int.parse(sm.group(2)!),
-        channel: int.parse(sm.group(3)!),
-        bssid:   sm.group(4)!.toUpperCase(),
-      ));
+      if (!_inStas) {
+        _tmpStations.clear();
+        _inStas = true;
+      }
+      _tmpStations.add(
+        StaEntry(
+          mac: sm.group(1)!.toUpperCase(),
+          rssi: int.parse(sm.group(2)!),
+          channel: int.parse(sm.group(3)!),
+          bssid: sm.group(4)!.toUpperCase(),
+        ),
+      );
       return;
     }
-    if (line == '(sta end)') { _commitStas(); return; }
-    if (line == '(no devices)') { stations = const []; _inStas = false; return; }
+    if (line == '(sta end)') {
+      _commitStas();
+      return;
+    }
+    if (line == '(no devices)') {
+      stations = const [];
+      _inStas = false;
+      return;
+    }
 
     // Dev scan progress
-    if (line.startsWith('dev: start')) { deviceScanning = true; return; }
+    if (line.startsWith('dev: start')) {
+      deviceScanning = true;
+      return;
+    }
     if (line.startsWith('dev: ') && line.contains('devices found')) {
       deviceScanning = false;
       conn.send('dev ls');
@@ -207,7 +243,10 @@ class DeviceController extends ChangeNotifier {
     // Sel list response: "sel: 0 3 5" or "sel: (empty)"
     final sl = _reSelLine.firstMatch(line);
     if (sl != null) {
-      final nums = sl.group(1)!.trim().split(RegExp(r'\s+'))
+      final nums = sl
+          .group(1)!
+          .trim()
+          .split(RegExp(r'\s+'))
           .where((s) => s.isNotEmpty)
           .map((s) => int.tryParse(s))
           .whereType<int>()
@@ -217,13 +256,16 @@ class DeviceController extends ChangeNotifier {
     }
 
     // Scan lifecycle
-    if (line == 'scan: start (dual-band)') { scanning = true; return; }
+    if (line == 'scan: start (dual-band)') {
+      scanning = true;
+      return;
+    }
     if (line.startsWith('scan: ') &&
         (RegExp(r'scan: \d+ APs').hasMatch(line) ||
-         line.startsWith('scan: no APs') ||
-         line.startsWith('scan: failed'))) {
+            line.startsWith('scan: no APs') ||
+            line.startsWith('scan: failed'))) {
       scanning = false;
-      selectedIdxs = {};  // indices shift after each scan
+      selectedIdxs = {}; // indices shift after each scan
       if (RegExp(r'scan: \d+ APs').hasMatch(line)) {
         _lastScanTime = DateTime.now();
         conn.send('ls');
@@ -307,7 +349,10 @@ class DeviceController extends ChangeNotifier {
 
     // Mode change confirmation
     final mm = _reMode.firstMatch(line);
-    if (mm != null) { attackMode = mm.group(1)!; return; }
+    if (mm != null) {
+      attackMode = mm.group(1)!;
+      return;
+    }
   }
 
   Future<void> scanWifi() async {

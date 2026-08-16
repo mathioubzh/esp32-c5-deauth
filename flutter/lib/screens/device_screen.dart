@@ -7,7 +7,6 @@ import 'package:provider/provider.dart';
 
 import '../models/acl_entry.dart';
 import '../models/ap_entry.dart';
-import '../models/sta_entry.dart';
 import '../services/device_controller.dart';
 import 'settings_screen.dart';
 
@@ -32,7 +31,6 @@ class _DeviceView extends StatefulWidget {
   State<_DeviceView> createState() => _DeviceViewState();
 }
 
-
 class _DeviceViewState extends State<_DeviceView>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
@@ -51,19 +49,23 @@ class _DeviceViewState extends State<_DeviceView>
 
   Future<bool> _confirmDisconnect(BuildContext context) async {
     final ctrl = context.read<DeviceController>();
+    final deviceName = ctrl.conn.device.name;
     final result = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Disconnect?'),
         content: Text(
-            'Disconnect from ${ctrl.conn.device.platformName.isNotEmpty ? ctrl.conn.device.platformName : "device"}?'),
+          'Disconnect from ${deviceName != null && deviceName.isNotEmpty ? deviceName : "device"}?',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Stay')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Stay'),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Disconnect')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Disconnect'),
+          ),
         ],
       ),
     );
@@ -73,8 +75,9 @@ class _DeviceViewState extends State<_DeviceView>
   @override
   Widget build(BuildContext context) {
     final ctrl = context.watch<DeviceController>();
-    final name = ctrl.conn.device.platformName.isNotEmpty
-        ? ctrl.conn.device.platformName
+    final deviceName = ctrl.conn.device.name;
+    final name = deviceName != null && deviceName.isNotEmpty
+        ? deviceName
         : 'Connected';
     return PopScope(
       canPop: false,
@@ -103,19 +106,29 @@ class _DeviceViewState extends State<_DeviceView>
                 final ctrl = context.read<DeviceController>();
                 switch (value) {
                   case 'console':
-                    Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => _ConsoleScreen(controller: ctrl)));
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => _ConsoleScreen(controller: ctrl),
+                      ),
+                    );
                   case 'whitelist':
-                    Navigator.of(context).push(MaterialPageRoute(
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
                         builder: (_) =>
-                            _AclScreen(controller: ctrl, isWhitelist: true)));
+                            _AclScreen(controller: ctrl, isWhitelist: true),
+                      ),
+                    );
                   case 'blacklist':
-                    Navigator.of(context).push(MaterialPageRoute(
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
                         builder: (_) =>
-                            _AclScreen(controller: ctrl, isWhitelist: false)));
+                            _AclScreen(controller: ctrl, isWhitelist: false),
+                      ),
+                    );
                   case 'settings':
                     Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const SettingsScreen()));
+                      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                    );
                 }
               },
               itemBuilder: (_) => const [
@@ -131,16 +144,16 @@ class _DeviceViewState extends State<_DeviceView>
             controller: _tabs,
             tabs: [
               const Tab(icon: Icon(Icons.wifi), text: 'Networks'),
-              Tab(icon: Icon(Icons.bolt, color: Colors.red.shade400), text: 'Nuke'),
+              Tab(
+                icon: Icon(Icons.bolt, color: Colors.red.shade400),
+                text: 'Nuke',
+              ),
             ],
           ),
         ),
         body: TabBarView(
           controller: _tabs,
-          children: const [
-            _NetworksTab(),
-            _NukeTab(),
-          ],
+          children: const [_NetworksTab(), _NukeTab()],
         ),
       ),
     );
@@ -200,7 +213,9 @@ class _NetworksTabState extends State<_NetworksTab> {
     Future.delayed(const Duration(seconds: 2), () {
       if (!mounted) return;
       final ctrl = context.read<DeviceController>();
-      if (ctrl.aps.isEmpty && !ctrl.scanning && !ctrl.attacking) ctrl.scanWifi();
+      if (ctrl.aps.isEmpty && !ctrl.scanning && !ctrl.attacking) {
+        ctrl.scanWifi();
+      }
     });
   }
 
@@ -237,7 +252,8 @@ class _NetworksTabState extends State<_NetworksTab> {
 
     _syncTicker(isAttacking);
 
-    final sorted = [...ctrl.aps]..sort((a, b) {
+    final sorted = [...ctrl.aps]
+      ..sort((a, b) {
         final sc = a.ssid.toLowerCase().compareTo(b.ssid.toLowerCase());
         if (sc != 0) return sc;
         if (!a.is5ghz && b.is5ghz) return -1;
@@ -275,23 +291,24 @@ class _NetworksTabState extends State<_NetworksTab> {
                 ? const SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Icon(Icons.search, size: 18),
             label: Text(ctrl.scanning ? 'Scanning…' : 'Scan'),
           ),
           const Spacer(),
           if (isAttacking)
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.shade700,
+              ),
               onPressed: ctrl.stopAttack,
               icon: const Icon(Icons.stop, size: 18),
               label: const Text('Stop'),
             )
           else
             ElevatedButton.icon(
-              onPressed: ctrl.selectedIdxs.isEmpty
-                  ? null
-                  : ctrl.startAttack,
+              onPressed: ctrl.selectedIdxs.isEmpty ? null : ctrl.startAttack,
               icon: const Icon(Icons.bolt, size: 18),
               label: const Text('Deauth'),
             ),
@@ -344,20 +361,24 @@ class _NetworksTabState extends State<_NetworksTab> {
         onChanged: isAttacking ? null : (_) => ctrl.toggleAp(ap.idx),
       ),
       title: Text(ap.ssid.isNotEmpty ? ap.ssid : '(hidden)'),
-      subtitle: Row(children: [
-        Container(
-          margin: const EdgeInsets.only(right: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-          decoration: BoxDecoration(
-            color: bandColor.withAlpha(40),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: bandColor.withAlpha(120)),
+      subtitle: Row(
+        children: [
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: bandColor.withAlpha(40),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: bandColor.withAlpha(120)),
+            ),
+            child: Text(
+              ap.is5ghz ? '5 GHz' : '2.4 GHz',
+              style: TextStyle(color: bandColor, fontSize: 11),
+            ),
           ),
-          child: Text(ap.is5ghz ? '5 GHz' : '2.4 GHz',
-              style: TextStyle(color: bandColor, fontSize: 11)),
-        ),
-        Text('ch ${ap.channel}   ${ap.rssi} dBm'),
-      ]),
+          Text('ch ${ap.channel}   ${ap.rssi} dBm'),
+        ],
+      ),
       selected: isSelected,
       onTap: isAttacking ? null : () => ctrl.toggleAp(ap.idx),
     );
@@ -427,8 +448,11 @@ class _AclTabState extends State<_AclTab> {
                     isDense: true,
                     border: const OutlineInputBorder(),
                     prefixIcon: Icon(
-                        widget.isWhitelist ? Icons.check_circle_outline : Icons.block,
-                        color: accent),
+                      widget.isWhitelist
+                          ? Icons.check_circle_outline
+                          : Icons.block,
+                      color: accent,
+                    ),
                   ),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Fa-f:]')),
@@ -445,7 +469,9 @@ class _AclTabState extends State<_AclTab> {
                     DropdownMenuItem(value: 'bssid', child: Text('bssid')),
                     DropdownMenuItem(value: 'sta', child: Text('sta')),
                   ],
-                  onChanged: (v) { if (v != null) setState(() => _kind = v); },
+                  onChanged: (v) {
+                    if (v != null) setState(() => _kind = v);
+                  },
                 ),
               ),
               const SizedBox(width: 8),
@@ -460,8 +486,11 @@ class _AclTabState extends State<_AclTab> {
         Expanded(
           child: entries.isEmpty
               ? Center(
-                  child: Text('${widget.isWhitelist ? "Whitelist" : "Blacklist"} is empty',
-                      style: const TextStyle(color: Colors.grey)))
+                  child: Text(
+                    '${widget.isWhitelist ? "Whitelist" : "Blacklist"} is empty',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                )
               : ListView.separated(
                   itemCount: entries.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),
@@ -470,10 +499,15 @@ class _AclTabState extends State<_AclTab> {
                     return ListTile(
                       dense: true,
                       leading: Icon(
-                          widget.isWhitelist ? Icons.check_circle_outline : Icons.block,
-                          color: accent),
-                      title: Text(e.mac,
-                          style: const TextStyle(fontFamily: 'monospace')),
+                        widget.isWhitelist
+                            ? Icons.check_circle_outline
+                            : Icons.block,
+                        color: accent,
+                      ),
+                      title: Text(
+                        e.mac,
+                        style: const TextStyle(fontFamily: 'monospace'),
+                      ),
                       subtitle: Text(e.kind),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline),
@@ -600,7 +634,6 @@ class _ConsoleTabState extends State<_ConsoleTab> {
   }
 }
 
-
 // ─── Nuke tab ─────────────────────────────────────────────────────────────────
 class _NukeTab extends StatefulWidget {
   const _NukeTab();
@@ -680,8 +713,8 @@ class _NukeTabState extends State<_NukeTab>
     final statusText = isNuking
         ? 'NUKING · ${ctrl.nukeApCount} NETS'
         : apCount == 0
-            ? 'NO TARGETS'
-            : '$apCount TARGETS IN RANGE';
+        ? 'NO TARGETS'
+        : '$apCount TARGETS IN RANGE';
     final infoText = isNuking
         ? '${_formatRemaining(remaining)} · ${_fmtPkts(ctrl.nukePkts)} frames'
         : null;
@@ -693,8 +726,8 @@ class _NukeTabState extends State<_NukeTab>
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
             child: MouseRegion(
-              onHover:  (e) => setState(() => _inputPos = e.localPosition),
-              onExit:   (_) => setState(() => _inputPos = null),
+              onHover: (e) => setState(() => _inputPos = e.localPosition),
+              onExit: (_) => setState(() => _inputPos = null),
               child: GestureDetector(
                 onTapDown: (e) => setState(() => _inputPos = e.localPosition),
                 child: AnimatedBuilder(
@@ -755,17 +788,17 @@ class _NukeTabState extends State<_NukeTab>
                   child: isNuking
                       ? ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red.shade800),
+                            backgroundColor: Colors.red.shade800,
+                          ),
                           onPressed: ctrl.stopAttack,
                           icon: const Icon(Icons.stop, size: 20),
                           label: const Text('Stop Nuke'),
                         )
                       : ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor:
-                                (apCount == 0 || isOtherAttack)
-                                    ? null
-                                    : Colors.red.shade700,
+                            backgroundColor: (apCount == 0 || isOtherAttack)
+                                ? null
+                                : Colors.red.shade700,
                           ),
                           onPressed: (apCount == 0 || isOtherAttack)
                               ? null
@@ -806,11 +839,11 @@ class _RadarPainter extends CustomPainter {
   final String? infoText;
   final Offset? inputPos;
 
-  static const _bg       = Color(0xFF010D01);
-  static const _ring     = Color(0xFF0C3A0C);
+  static const _bg = Color(0xFF010D01);
+  static const _ring = Color(0xFF0C3A0C);
   static const _phosphor = Color(0xFF39FF14);
   static const _dimGreen = Color(0xFF1B5C1B);
-  static const _targetC  = Color(0xFFFF4800);
+  static const _targetC = Color(0xFFFF4800);
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
@@ -849,7 +882,8 @@ class _RadarPainter extends CustomPainter {
     // Clip everything inside the circle
     canvas.save();
     canvas.clipPath(
-        Path()..addOval(Rect.fromCircle(center: center, radius: r)));
+      Path()..addOval(Rect.fromCircle(center: center, radius: r)),
+    );
 
     // Background
     canvas.drawPaint(Paint()..color = _bg);
@@ -871,9 +905,15 @@ class _RadarPainter extends CustomPainter {
     canvas.drawLine(Offset(cx, cy - r), Offset(cx, cy + r), xhPaint);
     final diag = r / math.sqrt2;
     canvas.drawLine(
-        Offset(cx - diag, cy - diag), Offset(cx + diag, cy + diag), xhPaint);
+      Offset(cx - diag, cy - diag),
+      Offset(cx + diag, cy + diag),
+      xhPaint,
+    );
     canvas.drawLine(
-        Offset(cx + diag, cy - diag), Offset(cx - diag, cy + diag), xhPaint);
+      Offset(cx + diag, cy - diag),
+      Offset(cx - diag, cy + diag),
+      xhPaint,
+    );
 
     // Azimuth tick marks every 30°
     final tickPaint = Paint()
@@ -913,14 +953,27 @@ class _RadarPainter extends CustomPainter {
       for (final ap in aps) {
         final a = apAngles[ap.bssid]!;
         final dr = _apRadius(ap.rssi, r, maxM);
-        final d = (Offset(cx + dr * math.cos(a), cy + dr * math.sin(a)) - inputPos!).distance;
-        if (d < best) { best = d; highlightBssid = ap.bssid; }
+        final d =
+            (Offset(cx + dr * math.cos(a), cy + dr * math.sin(a)) - inputPos!)
+                .distance;
+        if (d < best) {
+          best = d;
+          highlightBssid = ap.bssid;
+        }
       }
     }
 
     // AP dots with ping glow
     for (final ap in aps) {
-      _paintAp(canvas, ap, apAngles[ap.bssid]!, center, r, maxM, ap.bssid == highlightBssid);
+      _paintAp(
+        canvas,
+        ap,
+        apAngles[ap.bssid]!,
+        center,
+        r,
+        maxM,
+        ap.bssid == highlightBssid,
+      );
     }
 
     // Sweep line (on top of everything)
@@ -935,12 +988,13 @@ class _RadarPainter extends CustomPainter {
     // Bullseye at center (the deauther)
     canvas.drawCircle(center, 2.5, Paint()..color = _phosphor);
     canvas.drawCircle(
-        center,
-        6,
-        Paint()
-          ..color = _phosphor.withValues(alpha: 0.35)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0);
+      center,
+      6,
+      Paint()
+        ..color = _phosphor.withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0,
+    );
 
     canvas.restore(); // end clip
 
@@ -949,15 +1003,22 @@ class _RadarPainter extends CustomPainter {
     _paintStatus(canvas, center, r);
   }
 
-  void _paintAp(Canvas canvas, ApEntry ap, double angle, Offset center,
-      double maxR, double maxM, bool highlighted) {
-    final dotR  = _apRadius(ap.rssi, maxR, maxM);
-    final pos   = Offset(
+  void _paintAp(
+    Canvas canvas,
+    ApEntry ap,
+    double angle,
+    Offset center,
+    double maxR,
+    double maxM,
+    bool highlighted,
+  ) {
+    final dotR = _apRadius(ap.rssi, maxR, maxM);
+    final pos = Offset(
       center.dx + dotR * math.cos(angle),
       center.dy + dotR * math.sin(angle),
     );
 
-    final age  = _pingAge(angle);
+    final age = _pingAge(angle);
     final glow = math.max(0.0, 1.0 - age / 3.2);
 
     final col = isNuking ? _targetC : _phosphor;
@@ -966,7 +1027,8 @@ class _RadarPainter extends CustomPainter {
     // Highlight halo (hover / tap)
     if (highlighted) {
       canvas.drawCircle(
-        pos, 16,
+        pos,
+        16,
         Paint()
           ..color = col.withValues(alpha: 0.22)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
@@ -985,21 +1047,29 @@ class _RadarPainter extends CustomPainter {
     }
 
     // Core dot — larger when highlighted
-    canvas.drawCircle(pos, highlighted ? 4.5 : 2.5,
-        Paint()..color = highlighted ? col : (glow > 0.04 ? col : dim));
+    canvas.drawCircle(
+      pos,
+      highlighted ? 4.5 : 2.5,
+      Paint()..color = highlighted ? col : (glow > 0.04 ? col : dim),
+    );
 
     // Label: "SSID · dist" — bigger and fully bright when highlighted
-    final dist   = _fmtDist(ap.rssi);
-    final ssid   = ap.ssid.length > 18 ? '${ap.ssid.substring(0, 16)}..' : ap.ssid;
-    final label  = '$ssid · $dist';
-    final fSize  = highlighted ? 14.0 : 11.0;
-    final fAlpha = highlighted ? 1.0 : (glow > 0.04 ? 0.92 + 0.08 * glow : 0.72);
+    final dist = _fmtDist(ap.rssi);
+    final ssid = ap.ssid.length > 18
+        ? '${ap.ssid.substring(0, 16)}..'
+        : ap.ssid;
+    final label = '$ssid · $dist';
+    final fSize = highlighted ? 14.0 : 11.0;
+    final fAlpha = highlighted
+        ? 1.0
+        : (glow > 0.04 ? 0.92 + 0.08 * glow : 0.72);
     final tp = TextPainter(
       text: TextSpan(
         text: label,
         style: TextStyle(
-          color: (highlighted ? col : (glow > 0.04 ? col : dim))
-              .withValues(alpha: fAlpha),
+          color: (highlighted ? col : (glow > 0.04 ? col : dim)).withValues(
+            alpha: fAlpha,
+          ),
           fontSize: fSize,
           fontWeight: highlighted ? FontWeight.bold : FontWeight.w600,
         ),
@@ -1031,19 +1101,20 @@ class _RadarPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(canvas, Offset(
-        center.dx + 3,
-        center.dy - (i + 1) / 4.0 * r - tp.height / 2,
-      ));
+      tp.paint(
+        canvas,
+        Offset(center.dx + 3, center.dy - (i + 1) / 4.0 * r - tp.height / 2),
+      );
     }
   }
 
   void _paintStatus(Canvas canvas, Offset center, double r) {
     final left = center.dx - r + 10;
-    final top  = center.dy - r + 10;
+    final top = center.dy - r + 10;
 
-    final primaryColor =
-        isNuking ? _targetC.withValues(alpha: 0.9) : _phosphor.withValues(alpha: 0.72);
+    final primaryColor = isNuking
+        ? _targetC.withValues(alpha: 0.9)
+        : _phosphor.withValues(alpha: 0.72);
 
     final tp1 = TextPainter(
       text: TextSpan(
@@ -1064,7 +1135,9 @@ class _RadarPainter extends CustomPainter {
         text: TextSpan(
           text: infoText,
           style: TextStyle(
-              color: _phosphor.withValues(alpha: 0.55), fontSize: 8.5),
+            color: _phosphor.withValues(alpha: 0.55),
+            fontSize: 8.5,
+          ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
@@ -1075,8 +1148,9 @@ class _RadarPainter extends CustomPainter {
   // Strip common band/variant suffixes so same-router SSIDs share a group key.
   // e.g. "HomeNet_5G", "HomeNet-5GHz", "HomeNet_EXT" → "HomeNet"
   static final _suffixRe = RegExp(
-      r'[-_ ](5g(hz)?|2\.?4g(hz)?|2g(hz)?|6g(hz)?|5|2|ext(ender)?|plus|fast|iot|mesh|guest)$',
-      caseSensitive: false);
+    r'[-_ ](5g(hz)?|2\.?4g(hz)?|2g(hz)?|6g(hz)?|5|2|ext(ender)?|plus|fast|iot|mesh|guest)$',
+    caseSensitive: false,
+  );
   static String _normSsid(String ssid) {
     String s = ssid.trim();
     String prev;
@@ -1107,7 +1181,7 @@ class _RadarPainter extends CustomPainter {
   // Seconds since the sweep last passed this angle (0 … 30 s)
   double _pingAge(double dotAngle) {
     final sa = ((sweepAngle % (2 * math.pi)) + 2 * math.pi) % (2 * math.pi);
-    final da = ((dotAngle   % (2 * math.pi)) + 2 * math.pi) % (2 * math.pi);
+    final da = ((dotAngle % (2 * math.pi)) + 2 * math.pi) % (2 * math.pi);
     return ((sa - da + 2 * math.pi) % (2 * math.pi)) / (2 * math.pi) * 30.0;
   }
 

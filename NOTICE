@@ -5,3 +5,8 @@ This product includes software derived from the
 "ESP32-C5 Dual-Band Deauther" project by AnvilBrain
   https://github.com/AnvilBrain/esp32-c5-dualband-deauther
 The original work is licensed under the MIT License.
+
+The Flutter controller uses Universal BLE by Navideck Labs OÜ
+  https://github.com/Navideck/universal_ble
+Universal BLE is licensed under the BSD 3-Clause License. Its complete
+license text is included in Flutter's generated application notices.

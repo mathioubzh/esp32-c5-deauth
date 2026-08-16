@@ -2,9 +2,8 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
+import 'package:universal_ble/universal_ble.dart';
 
 import '../services/api_server.dart';
 import '../services/device_controller.dart';
@@ -13,7 +12,10 @@ import 'device_screen.dart';
 import 'settings_screen.dart';
 
 class ScanScreen extends StatefulWidget {
-  const ScanScreen({super.key});
+  const ScanScreen({super.key, this.autoStart = true});
+
+  /// Disabled by widget tests that run without a native BLE adapter/plugin.
+  final bool autoStart;
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -21,142 +23,214 @@ class ScanScreen extends StatefulWidget {
 
 class _ScanScreenState extends State<ScanScreen> {
   final NusClient _client = NusClient();
-  StreamSubscription<List<ScanResult>>? _resultsSub;
-  StreamSubscription<bool>? _scanningSub;
-  StreamSubscription<BluetoothAdapterState>? _adapterSub;
-  List<ScanResult> _results = [];
+  StreamSubscription<List<BleDevice>>? _resultsSub;
+  StreamSubscription<AvailabilityState>? _adapterSub;
+  List<BleDevice> _results = [];
   bool _scanning = false;
   bool _connecting = false;
+  bool _rescanEnabled = true;
   Timer? _rescanTimer;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _scanningSub = FlutterBluePlus.isScanning.listen((s) {
-      if (!mounted) return;
-      final wasScanning = _scanning;
-      setState(() => _scanning = s);
-      // When a scan cycle ends naturally, schedule the next one in 5 seconds.
-      if (wasScanning && !s && !_connecting) {
-        _rescanTimer?.cancel();
-        _rescanTimer = Timer(const Duration(seconds: 5), () {
-          if (mounted && !_connecting) _maybeStartScan();
-        });
-      }
-    });
-    // Kick off a scan when BT adapter turns on (handles the case where BT was
-    // off at startup and the user enables it via the system dialog).
-    _adapterSub = FlutterBluePlus.adapterState.listen((state) {
-      if (state == BluetoothAdapterState.on && !_scanning && !_connecting && mounted) {
-        _maybeStartScan();
-      }
-    });
-    _maybeStartScan();
+    if (!widget.autoStart) return;
+    _adapterSub = UniversalBle.availabilityStream.listen(
+      (state) {
+        if (state == AvailabilityState.poweredOn &&
+            !_scanning &&
+            !_connecting &&
+            mounted) {
+          unawaited(_maybeStartScan());
+        }
+      },
+      onError: (Object error) {
+        if (mounted) setState(() => _error = 'Bluetooth error: $error');
+      },
+    );
+    unawaited(_maybeStartScan());
   }
 
   @override
   void dispose() {
     _rescanTimer?.cancel();
-    _resultsSub?.cancel();
-    _scanningSub?.cancel();
-    _adapterSub?.cancel();
-    _client.stopScan();
+    unawaited(_resultsSub?.cancel());
+    unawaited(_adapterSub?.cancel());
+    if (widget.autoStart) {
+      unawaited(_client.stopScan());
+    }
     super.dispose();
   }
 
   Future<void> _maybeStartScan() async {
+    if (_scanning || _connecting) return;
     if (!await _ensurePermissions()) return;
     if (!await _ensureAdapterOn()) return;
-    _startScan();
+    await _startScan();
   }
 
   Future<bool> _ensurePermissions() async {
-    if (!Platform.isAndroid) return true;
-    // BLUETOOTH_SCAN is declared with neverForLocation in the manifest,
-    // so location permission is not required on API 31+.
-    final statuses = await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-    ].request();
-    final ok = statuses.values.every((s) => s.isGranted || s.isLimited);
-    if (!ok && mounted) {
-      setState(() => _error = 'Bluetooth permissions denied.');
+    try {
+      await UniversalBle.requestPermissions(withAndroidFineLocation: false);
+      return true;
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = 'Bluetooth permissions denied: $error');
+      }
+      return false;
     }
-    return ok;
   }
 
   Future<bool> _ensureAdapterOn() async {
-    final state = await FlutterBluePlus.adapterState.first;
-    if (state == BluetoothAdapterState.on) return true;
-    if (Platform.isAndroid) {
+    AvailabilityState state;
+    try {
+      state = await UniversalBle.getBluetoothAvailabilityState();
+    } catch (error) {
+      if (mounted) setState(() => _error = 'Bluetooth unavailable: $error');
+      return false;
+    }
+
+    if (state == AvailabilityState.poweredOn) return true;
+
+    if (Platform.isAndroid || Platform.isWindows || Platform.isLinux) {
       try {
-        await FlutterBluePlus.turnOn();
-        // turnOn() shows the system dialog but doesn't block until BT is on.
-        // The adapterState listener in initState will call _maybeStartScan when
-        // it actually transitions to on; bail here so we don't double-scan.
+        await UniversalBle.enableBluetooth();
+        // The availability listener starts scanning after the radio reports it
+        // is fully powered on.
         return false;
       } catch (_) {}
     }
-    if (mounted) setState(() => _error = 'Bluetooth is off — enable it and retry.');
+
+    if (mounted) {
+      final message = switch (state) {
+        AvailabilityState.unsupported =>
+          'Bluetooth Low Energy is not supported on this computer.',
+        AvailabilityState.unauthorized =>
+          'Bluetooth access is not authorised for this app.',
+        _ => 'Bluetooth is off — enable it and retry.',
+      };
+      setState(() => _error = message);
+    }
     return false;
   }
 
-  void _startScan() {
+  Future<void> _startScan() async {
     _rescanTimer?.cancel();
+    await _resultsSub?.cancel();
+    if (!mounted) return;
+
     setState(() {
       _error = null;
       _results = [];
+      _scanning = true;
     });
-    _resultsSub?.cancel();
-    _resultsSub = _client.scan().listen((rs) {
+
+    try {
+      final stream = await _client.scan();
+      if (!mounted) {
+        await _client.stopScan();
+        return;
+      }
+      _resultsSub = stream.listen(
+        (devices) {
+          if (!mounted) return;
+          setState(() => _results = devices);
+          if (devices.length == 1 && !_connecting) {
+            unawaited(_connect(devices.first));
+          }
+        },
+        onError: (Object error) {
+          if (mounted) setState(() => _error = 'Scan error: $error');
+        },
+        onDone: _onScanEnded,
+      );
+    } catch (error) {
       if (!mounted) return;
-      setState(() => _results = rs);
-      // Auto-connect when exactly one device is visible.
-      if (rs.length == 1 && !_connecting) _connect(rs.first.device);
-    }, onError: (e) {
-      if (mounted) setState(() => _error = 'scan error: $e');
+      setState(() {
+        _scanning = false;
+        _error = 'Scan error: $error';
+      });
+      _scheduleRescan();
+    }
+  }
+
+  void _onScanEnded() {
+    if (!mounted) return;
+    setState(() => _scanning = false);
+    _scheduleRescan();
+  }
+
+  void _scheduleRescan() {
+    if (!_rescanEnabled || _connecting || !mounted) return;
+    _rescanTimer?.cancel();
+    _rescanTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted && !_connecting && _rescanEnabled) {
+        unawaited(_maybeStartScan());
+      }
     });
   }
 
-  Future<void> _connect(BluetoothDevice device) async {
+  Future<void> _connect(BleDevice device) async {
     if (_connecting) return;
+    _rescanEnabled = false;
     _rescanTimer?.cancel();
+    await _client.stopScan();
+    if (!mounted) return;
+
     setState(() {
       _error = null;
       _connecting = true;
+      _scanning = false;
     });
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      ),
     );
+
     DeviceController? controller;
+    ApiServer? api;
+    var apiAttached = false;
+    var dialogVisible = true;
     try {
-      final conn = await _client.connect(device);
-      controller = DeviceController(conn);
-      if (!mounted) return;
-      final api = context.read<ApiServer>();
+      final connection = await _client.connect(device);
+      controller = DeviceController(connection);
+      if (!mounted) {
+        await connection.disconnect();
+        return;
+      }
+      api = context.read<ApiServer>();
       api.attach(controller);
-      Navigator.of(context).pop(); // dismiss spinner
+      apiAttached = true;
+      Navigator.of(context).pop();
+      dialogVisible = false;
       await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => DeviceScreen(controller: controller!)),
+        MaterialPageRoute(
+          builder: (_) => DeviceScreen(controller: controller!),
+        ),
       );
       api.detach();
-      // Await the full BLE teardown so the ESP32 receives a clean disconnect
-      // and restarts advertising before we scan again.
+      apiAttached = false;
       await controller.conn.disconnect();
-    } catch (e) {
+    } catch (error) {
       if (!mounted) return;
-      Navigator.of(context).pop();
-      setState(() => _error = '$e');
+      if (dialogVisible && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      setState(() => _error = '$error');
     } finally {
+      if (apiAttached) {
+        api?.detach();
+      }
       controller?.dispose();
       if (mounted) {
         setState(() => _connecting = false);
-        // Give the BLE stack and the ESP32 a moment to settle before rescanning.
-        await Future.delayed(const Duration(seconds: 2));
-        if (mounted) _maybeStartScan();
+        _rescanEnabled = true;
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (mounted) unawaited(_maybeStartScan());
       }
     }
   }
@@ -172,10 +246,12 @@ class _ScanScreenState extends State<ScanScreen> {
             tooltip: _scanning ? 'Stop scan' : 'Scan',
             onPressed: () {
               if (_scanning) {
+                _rescanEnabled = false;
                 _rescanTimer?.cancel();
-                _client.stopScan();
+                unawaited(_client.stopScan());
               } else {
-                _maybeStartScan();
+                _rescanEnabled = true;
+                unawaited(_maybeStartScan());
               }
             },
           ),
@@ -183,8 +259,10 @@ class _ScanScreenState extends State<ScanScreen> {
             icon: const Icon(Icons.menu),
             onSelected: (value) {
               if (value == 'settings') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                unawaited(
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  ),
                 );
               }
             },
@@ -215,7 +293,8 @@ class _ScanScreenState extends State<ScanScreen> {
                 : ListView.separated(
                     itemCount: _results.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, i) => _resultTile(_results[i]),
+                    itemBuilder: (context, index) =>
+                        _resultTile(_results[index]),
                   ),
           ),
         ],
@@ -223,16 +302,16 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  Widget _resultTile(ScanResult r) {
-    final name = r.advertisementData.advName.isNotEmpty
-        ? r.advertisementData.advName
-        : (r.device.platformName.isNotEmpty ? r.device.platformName : '(unnamed)');
+  Widget _resultTile(BleDevice device) {
+    final name = (device.name?.isNotEmpty ?? false)
+        ? device.name!
+        : '(unnamed)';
     return ListTile(
       leading: const Icon(Icons.bluetooth),
       title: Text(name),
-      subtitle: Text('${r.device.remoteId}\n${r.rssi} dBm'),
+      subtitle: Text('${device.deviceId}\n${device.rssi ?? '?'} dBm'),
       isThreeLine: true,
-      onTap: () => _connect(r.device),
+      onTap: () => unawaited(_connect(device)),
     );
   }
 }

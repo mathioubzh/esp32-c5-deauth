@@ -12,10 +12,16 @@ void main() {
 }
 
 class DeautherApp extends StatelessWidget {
-  const DeautherApp({super.key, required this.settings, required this.api});
+  const DeautherApp({
+    super.key,
+    required this.settings,
+    required this.api,
+    this.home = const ScanScreen(),
+  });
 
   final Settings settings;
   final ApiServer api;
+  final Widget home;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +40,7 @@ class DeautherApp extends StatelessWidget {
           ),
           useMaterial3: true,
         ),
-        home: const ScanScreen(),
+        home: home,
       ),
     );
   }

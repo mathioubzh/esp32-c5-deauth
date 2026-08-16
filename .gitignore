@@ -8,7 +8,6 @@ managed_components/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
-pubspec.lock
 
 # Common compiled/generated artifacts
 *.o
