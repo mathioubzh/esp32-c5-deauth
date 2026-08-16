@@ -4,64 +4,57 @@
 //   Service: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
 //   RX char: 6E400002-…   (write / write-no-rsp — host → device)
 //   TX char: 6E400003-…   (notify              — device → host)
-//
-// Public surface:
-//   - scan()              streams discovered peripherals advertising the NUS
-//   - connect(device)     hooks up TX/RX, returns Stream<String> of incoming
-//                         text and a `send()` to write commands
-//   - NusConnection.disconnect()       graceful tear-down
-//   - NusConnection.disconnected       Future that completes when peer drops
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:universal_ble/universal_ble.dart';
+
+import 'app_logger.dart';
 
 class NusUuids {
-  static final Guid service = Guid('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
-  static final Guid rx      = Guid('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
-  static final Guid tx      = Guid('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+  static const service = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  static const rx = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+  static const tx = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 }
 
 class NusConnection {
   NusConnection._({
     required this.device,
-    required BluetoothCharacteristic rx,
+    required BleCharacteristic rx,
     required this.incoming,
     required this.disconnected,
     required Future<void> Function() doDisconnect,
-  })  : _rx = rx,
-        _doDisconnect = doDisconnect;
+  }) : _rx = rx,
+       _doDisconnect = doDisconnect;
 
-  final BluetoothDevice device;
-  final BluetoothCharacteristic _rx;
+  final BleDevice device;
+  final BleCharacteristic _rx;
 
   /// Stream of UTF-8 decoded notifications from the TX characteristic.
-  /// Only emits NEW notifications (not the cached `lastValueStream`), so
-  /// a fresh connection never sees stale data from a previous session.
   final Stream<String> incoming;
 
-  /// Resolves when the BLE link drops for any reason — graceful disconnect,
-  /// peer drop, RF loss. Use this to drive UI state transitions instead of
-  /// polling `device.isConnected`.
+  /// Resolves when the BLE link drops for any reason.
   final Future<void> disconnected;
 
   final Future<void> Function() _doDisconnect;
   bool _disconnectCalled = false;
 
-  /// Sends `text` to the device's RX characteristic. Adds a trailing newline
-  /// if missing (the firmware CLI is line-buffered). Silently no-ops if the
-  /// device has dropped — callers don't need to wrap each call.
+  /// Sends [text] to the device's RX characteristic. The firmware CLI is
+  /// line-buffered, so a trailing newline is appended when needed.
   Future<void> send(String text) async {
-    if (!device.isConnected) return;
+    if (!await device.isConnected) return;
     if (!text.endsWith('\n')) text = '$text\n';
-    final bytes = utf8.encode(text);
-    final wnrSupported = _rx.properties.writeWithoutResponse;
+
+    final withoutResponse = _rx.properties.contains(
+      CharacteristicProperty.writeWithoutResponse,
+    );
     try {
-      await _rx.write(bytes, withoutResponse: wnrSupported);
-    } on FlutterBluePlusException catch (_) {
-      // Device disconnected mid-write — disconnected future will fire shortly.
+      await _rx.write(utf8.encode(text), withResponse: !withoutResponse);
+    } catch (_) {
+      // The link may have dropped during the write. The disconnected future
+      // drives the UI back to the scan screen.
     }
   }
 
@@ -73,153 +66,343 @@ class NusConnection {
 }
 
 class NusClient {
-  StreamSubscription<List<ScanResult>>? _scanSub;
+  final AppLogger _logger = AppLogger.instance;
+  StreamSubscription<BleDevice>? _scanSub;
+  StreamController<List<BleDevice>>? _scanController;
+  Timer? _scanTimer;
+  final Map<String, BleDevice> _scanResults = {};
+  final Set<String> _seenDeviceIds = {};
+  final Map<String, String> _advertisementSignatures = {};
 
-  /// Streams scan results filtered to peripherals advertising the NUS service
-  /// or named like our firmware. Caller is expected to call [stopScan] when
-  /// done. Safe to call multiple times.
-  Stream<List<ScanResult>> scan({Duration timeout = const Duration(seconds: 8)}) {
-    final controller = StreamController<List<ScanResult>>.broadcast();
-    _scanSub?.cancel();
-    _scanSub = FlutterBluePlus.scanResults.listen((results) {
-      final filtered = results.where(_looksLikeDevice).toList();
-      if (!controller.isClosed) controller.add(filtered);
-    });
-    if (Platform.isAndroid) {
-      FlutterBluePlus.startScan(
-        timeout: timeout,
-        withServices: [NusUuids.service],
-        androidScanMode: AndroidScanMode.lowLatency,
-      ).catchError((_) => FlutterBluePlus.startScan(timeout: timeout));
-    } else {
-      FlutterBluePlus.startScan(timeout: timeout);
+  /// Number of distinct BLE peripherals reported by the operating system in
+  /// the current scan, including devices that do not look like the controller.
+  int get seenDeviceCount => _seenDeviceIds.length;
+
+  /// Streams matching peripherals until [timeout] expires or [stopScan] is
+  /// called. Devices are filtered in Dart so name-based discovery still works
+  /// when a platform omits advertised service UUIDs from its scan result.
+  Future<Stream<List<BleDevice>>> scan({
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    await stopScan();
+
+    // Single-subscription streams buffer any discovery events that arrive
+    // between startScan() completing and the UI attaching its listener.
+    final controller = StreamController<List<BleDevice>>();
+    _scanController = controller;
+    _scanResults.clear();
+    _seenDeviceIds.clear();
+    _advertisementSignatures.clear();
+    _logger.info('BLE scan requested; timeout=${timeout.inSeconds}s');
+
+    void addDevice(BleDevice device) {
+      final firstSighting = _seenDeviceIds.add(device.deviceId);
+      final signature = _advertisementSignature(device);
+      if (firstSighting || _advertisementSignatures[device.deviceId] != signature) {
+        _advertisementSignatures[device.deviceId] = signature;
+        _logger.info('BLE advertisement: ${_describeDevice(device)}');
+      }
+      if (looksLikeController(device) ||
+          (Platform.isWindows && _hasNoUsefulName(device))) {
+        _scanResults[device.deviceId] = device;
+      } else if (!firstSighting) {
+        return;
+      }
+
+      final results = _scanResults.values.toList()
+        ..sort((a, b) => (b.rssi ?? -999).compareTo(a.rssi ?? -999));
+      if (!controller.isClosed) controller.add(results);
     }
-    controller.onCancel = () async {
-      await stopScan();
-    };
+
+    _scanSub = UniversalBle.scanStream.listen(
+      addDevice,
+      onError: (Object error, StackTrace stackTrace) {
+        _logger.error('BLE scan stream failed', error, stackTrace);
+        if (!controller.isClosed) controller.addError(error, stackTrace);
+        unawaited(stopScan());
+      },
+    );
+
+    try {
+      // On Windows, a peripheral that is already connected through a previous
+      // session or another application is omitted from advertisement scan
+      // results. Universal BLE exposes those devices through this separate
+      // system-device query.
+      if (Platform.isWindows) {
+        try {
+          final systemDevices = await UniversalBle.getSystemDevices(
+            withServices: const [NusUuids.service],
+          );
+          _logger.info(
+            'Windows NUS system-device query returned '
+            '${systemDevices.length} device(s)',
+          );
+          for (final device in systemDevices) {
+            addDevice(device);
+          }
+        } catch (error, stackTrace) {
+          _logger.error(
+            'Windows NUS system-device query failed',
+            error,
+            stackTrace,
+          );
+          // A normal advertisement scan can still discover the controller.
+        }
+      }
+
+      await UniversalBle.startScan(
+        platformConfig: Platform.isAndroid
+            ? PlatformConfig(
+                android: AndroidOptions(
+                  requestLocationPermission: false,
+                  scanMode: AndroidScanMode.lowLatency,
+                  legacy: true,
+                ),
+              )
+            : null,
+      );
+      _logger.info('Platform BLE scan started');
+    } catch (error, stackTrace) {
+      _logger.error('Unable to start platform BLE scan', error, stackTrace);
+      await _closeScan(stopPlatform: false);
+      rethrow;
+    }
+
+    _scanTimer = Timer(timeout, () => unawaited(stopScan()));
     return controller.stream;
   }
 
-  Future<void> stopScan() async {
-    try { await FlutterBluePlus.stopScan(); } catch (_) {}
-    await _scanSub?.cancel();
+  Future<void> stopScan() => _closeScan(stopPlatform: true);
+
+  Future<void> _closeScan({required bool stopPlatform}) async {
+    _scanTimer?.cancel();
+    _scanTimer = null;
+
+    final subscription = _scanSub;
+    final controller = _scanController;
+    final hadActiveScan = subscription != null || controller != null;
     _scanSub = null;
+    _scanController = null;
+
+    if (stopPlatform) {
+      try {
+        await UniversalBle.stopScan();
+      } catch (_) {}
+    }
+    await subscription?.cancel();
+    if (controller != null && !controller.isClosed) await controller.close();
+    if (hadActiveScan) {
+      _logger.info(
+        'BLE scan stopped; seen=${_seenDeviceIds.length}, '
+        'candidates=${_scanResults.length}',
+      );
+    }
   }
 
-  bool _looksLikeDevice(ScanResult r) {
-    final uuids = r.advertisementData.serviceUuids.map((u) => u.str.toLowerCase()).toList();
-    if (uuids.contains(NusUuids.service.str.toLowerCase())) return true;
-    final name = (r.advertisementData.advName.isNotEmpty
-        ? r.advertisementData.advName
-        : r.device.platformName);
-    return name.toLowerCase().contains('deauther') ||
-        name.toLowerCase().contains('esp32c5');
+  /// Whether the advertisement contains the expected NUS UUID or controller
+  /// name. Windows sometimes reports the same advertisement without either,
+  /// so unnamed devices are also shown as manual diagnostic candidates there.
+  bool looksLikeController(BleDevice device) {
+    if (device.services.any(
+      (uuid) => BleUuidParser.compareStrings(uuid, NusUuids.service),
+    )) {
+      return true;
+    }
+    final name = device.name?.toLowerCase() ?? '';
+    return name.contains('deauther') || name.contains('esp32c5');
   }
 
-  /// Connect, discover services, subscribe to TX notifications, return a
-  /// [NusConnection] exposing the bidirectional channel.
-  ///
-  /// Safe to call against the same `device` repeatedly — any prior link is
-  /// torn down and the GATT cache invalidated (Android) before re-opening.
-  Future<NusConnection> connect(BluetoothDevice device) async {
+  bool _hasNoUsefulName(BleDevice device) {
+    final name = device.name?.trim().toLowerCase() ?? '';
+    return name.isEmpty || name == 'unknown' || name == 'appareil inconnu';
+  }
+
+  /// Connects, discovers NUS and exposes a bidirectional text channel.
+  Future<NusConnection> connect(BleDevice device) async {
     await stopScan();
 
-    // If the platform still thinks we're connected from a prior session,
-    // tear it down first. flutter_blue_plus will otherwise return immediately
-    // from connect() with a stale handle and service discovery will fail.
-    if (device.isConnected) {
-      try { await device.disconnect(); } catch (_) {}
-      await _waitForState(device, BluetoothConnectionState.disconnected,
-          const Duration(seconds: 3));
+    _logger.info('Connection attempt: ${_describeDevice(device)}');
+
+    final alreadyConnected = await device.isConnected;
+    _logger.info('Initial connected state: $alreadyConnected');
+    if (alreadyConnected) {
+      try {
+        _logger.info('Disconnecting stale GATT session');
+        await device.disconnect(timeout: const Duration(seconds: 3));
+      } catch (error, stackTrace) {
+        _logger.error('Stale-session disconnect failed', error, stackTrace);
+      }
+      await _waitForConnection(device, connected: false);
     }
 
-    // Android caches GATT services per-device. If the firmware was rebuilt
-    // (handles renumbered) the cache is stale and discoverServices returns
-    // garbage. Force-clear before connecting.
-    if (Platform.isAndroid) {
-      try { await device.clearGattCache(); } catch (_) {}
-    }
+    _logger.info('Calling BLE connect (timeout=12s, autoConnect=false)');
+    await device.connect(
+      timeout: const Duration(seconds: 12),
+      autoConnect: false,
+    );
+    _logger.info('BLE connect completed');
 
-    await device.connect(timeout: const Duration(seconds: 12), autoConnect: false);
-    await _waitForState(device, BluetoothConnectionState.connected,
-        const Duration(seconds: 12));
-
-    // Bigger MTU = fewer notification fragments. The firmware requested 247.
-    // Some platforms (iOS / desktop) ignore this — that's fine.
     try {
-      await device.requestMtu(247);
-    } catch (_) {}
-
-    final services = await device.discoverServices();
-    final svc = services.firstWhere(
-      (s) => s.uuid == NusUuids.service,
-      orElse: () => throw StateError('NUS service not found on this device'),
-    );
-
-    final rx = svc.characteristics.firstWhere(
-      (c) => c.uuid == NusUuids.rx,
-      orElse: () => throw StateError('NUS RX characteristic missing'),
-    );
-    final tx = svc.characteristics.firstWhere(
-      (c) => c.uuid == NusUuids.tx,
-      orElse: () => throw StateError('NUS TX characteristic missing'),
-    );
-
-    await tx.setNotifyValue(true);
-
-    // CRITICAL: use onValueReceived (new notifications only), NOT
-    // lastValueStream (which replays the cached last value at subscribe time
-    // and would inject a stale chunk from the previous session into the
-    // parser on every reconnect).
-    final incoming = tx.onValueReceived.map((bytes) {
+      // A larger MTU reduces notification fragmentation. Unsupported platforms
+      // safely ignore or reject this best-effort request.
       try {
-        return utf8.decode(bytes, allowMalformed: true);
-      } catch (_) {
-        return String.fromCharCodes(bytes);
+        final mtu = await device.requestMtu(247);
+        _logger.info('Effective MTU/PDU request result: $mtu');
+      } catch (error) {
+        _logger.warning('MTU request was not available: $error');
       }
-    });
 
-    // Resolve `disconnected` when the device transitions to disconnected,
-    // regardless of who initiated it.
-    final disconnectedCompleter = Completer<void>();
-    late StreamSubscription<BluetoothConnectionState> stateSub;
-    stateSub = device.connectionState.listen((s) {
-      if (s == BluetoothConnectionState.disconnected
-          && !disconnectedCompleter.isCompleted) {
-        disconnectedCompleter.complete();
-        stateSub.cancel();
+      final services = await device.discoverServices();
+      _logger.info(
+        'GATT discovery returned ${services.length} service(s):\n'
+        '${_describeServices(services)}',
+      );
+      final service = services.firstWhere(
+        (candidate) =>
+            BleUuidParser.compareStrings(candidate.uuid, NusUuids.service),
+        orElse: () => throw StateError('NUS service not found on this device'),
+      );
+      final rx = service.characteristics.firstWhere(
+        (candidate) =>
+            BleUuidParser.compareStrings(candidate.uuid, NusUuids.rx),
+        orElse: () => throw StateError('NUS RX characteristic missing'),
+      );
+      final tx = service.characteristics.firstWhere(
+        (candidate) =>
+            BleUuidParser.compareStrings(candidate.uuid, NusUuids.tx),
+        orElse: () => throw StateError('NUS TX characteristic missing'),
+      );
+
+      final txSubscription =
+          tx.properties.contains(CharacteristicProperty.notify)
+          ? tx.notifications
+          : tx.indications;
+      await txSubscription.subscribe();
+      _logger.info('Subscribed to NUS TX notifications/indications');
+
+      final incoming = tx.onValueReceived.map((bytes) {
+        _logger.info('NUS RX ${bytes.length} byte(s): ${_hex(bytes)}');
+        try {
+          return utf8.decode(bytes, allowMalformed: true);
+        } catch (_) {
+          return String.fromCharCodes(bytes);
+        }
+      });
+
+      final disconnectedCompleter = Completer<void>();
+      late StreamSubscription<bool> stateSub;
+      stateSub = device.connectionStream.listen((connected) {
+        _logger.info('BLE connection state changed: connected=$connected');
+        if (!connected && !disconnectedCompleter.isCompleted) {
+          disconnectedCompleter.complete();
+          unawaited(stateSub.cancel());
+        }
+      });
+
+      Future<void> doDisconnect() async {
+        _logger.info('Disconnect requested by application');
+        try {
+          await txSubscription.unsubscribe();
+        } catch (error) {
+          _logger.warning('NUS unsubscribe failed: $error');
+        }
+        try {
+          await device.disconnect(timeout: const Duration(seconds: 3));
+        } catch (error) {
+          _logger.warning('BLE disconnect failed: $error');
+        }
+        try {
+          await _waitForConnection(device, connected: false);
+        } catch (_) {}
+        await stateSub.cancel();
+        if (!disconnectedCompleter.isCompleted) {
+          disconnectedCompleter.complete();
+        }
       }
-    });
 
-    Future<void> doDisconnect() async {
-      try { await tx.setNotifyValue(false); } catch (_) {}
-      try { await device.disconnect(); } catch (_) {}
-      // Wait for the platform to confirm the disconnect so the next
-      // connect() attempt starts from a clean slate.
+      return NusConnection._(
+        device: device,
+        rx: rx,
+        incoming: incoming,
+        disconnected: disconnectedCompleter.future,
+        doDisconnect: doDisconnect,
+      );
+    } catch (error, stackTrace) {
+      _logger.error('Connection or GATT discovery failed', error, stackTrace);
+      // Do not leave a half-open Windows GATT session when service discovery
+      // or notification setup fails.
       try {
-        await _waitForState(device, BluetoothConnectionState.disconnected,
-            const Duration(seconds: 3));
+        await device.disconnect(timeout: const Duration(seconds: 3));
       } catch (_) {}
-      try { await stateSub.cancel(); } catch (_) {}
+      Error.throwWithStackTrace(error, stackTrace);
     }
-
-    return NusConnection._(
-      device: device,
-      rx: rx,
-      incoming: incoming,
-      disconnected: disconnectedCompleter.future,
-      doDisconnect: doDisconnect,
-    );
   }
 
-  Future<void> _waitForState(
-    BluetoothDevice device,
-    BluetoothConnectionState target,
-    Duration timeout,
-  ) async {
-    if (await device.connectionState.first == target) return;
-    await device.connectionState
-        .firstWhere((s) => s == target)
+  String _advertisementSignature(BleDevice device) {
+    return <String>[
+      '${device.name}',
+      '${device.rawName}',
+      '${device.paired}',
+      '${device.isSystemDevice}',
+      device.services.join(','),
+      device.manufacturerDataList
+          .map((data) => '${data.companyIdRadix16}:${data.payloadRadix16}')
+          .join(','),
+      device.serviceData.entries
+          .map((entry) => '${entry.key}:${_hex(entry.value)}')
+          .join(','),
+    ].join('|');
+  }
+
+  String _describeDevice(BleDevice device) {
+    final manufacturerData = device.manufacturerDataList.isEmpty
+        ? 'none'
+        : device.manufacturerDataList
+              .map(
+                (data) =>
+                    'company=0x${data.companyIdRadix16},payload=${data.payloadRadix16}',
+              )
+              .join('; ');
+    final serviceData = device.serviceData.isEmpty
+        ? 'none'
+        : device.serviceData.entries
+              .map((entry) => '${entry.key}=${_hex(entry.value)}')
+              .join('; ');
+    return 'id=${device.deviceId}, name=${device.name ?? '<null>'}, '
+        'rawName=${device.rawName ?? '<null>'}, rssi=${device.rssi}, '
+        'paired=${device.paired}, system=${device.isSystemDevice}, '
+        'timestamp=${device.timestamp}, services=${device.services}, '
+        'manufacturer={$manufacturerData}, serviceData={$serviceData}';
+  }
+
+  String _describeServices(List<BleService> services) {
+    if (services.isEmpty) return '  <no services>';
+    return services.map((service) {
+      final characteristics = service.characteristics.isEmpty
+          ? '    <no characteristics>'
+          : service.characteristics
+                .map(
+                  (characteristic) =>
+                      '    characteristic=${characteristic.uuid} '
+                      'properties=${characteristic.properties.map((p) => p.name).toList()}',
+                )
+                .join('\n');
+      return '  service=${service.uuid}\n$characteristics';
+    }).join('\n');
+  }
+
+  String _hex(Iterable<int> bytes) => bytes
+      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+      .join();
+
+  Future<void> _waitForConnection(
+    BleDevice device, {
+    required bool connected,
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    if ((await device.isConnected) == connected) return;
+    await device.connectionStream
+        .firstWhere((current) => current == connected)
         .timeout(timeout);
   }
 }

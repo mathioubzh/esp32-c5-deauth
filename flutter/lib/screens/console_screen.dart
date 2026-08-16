@@ -87,14 +87,23 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
   }
 
   Future<bool> _confirmDisconnect() async {
+    final deviceName = widget.connection.device.name;
     final result = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Disconnect?'),
-        content: Text('Disconnect from ${widget.connection.device.platformName}?'),
+        content: Text(
+          'Disconnect from ${deviceName != null && deviceName.isNotEmpty ? deviceName : "device"}?',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Stay')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Disconnect')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Stay'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Disconnect'),
+          ),
         ],
       ),
     );
@@ -103,6 +112,7 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final deviceName = widget.connection.device.name;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
@@ -114,9 +124,11 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.connection.device.platformName.isNotEmpty
-              ? widget.connection.device.platformName
-              : 'Connected'),
+          title: Text(
+            deviceName != null && deviceName.isNotEmpty
+                ? deviceName
+                : 'Connected',
+          ),
           actions: [
             IconButton(
               tooltip: 'Clear log',
@@ -182,10 +194,7 @@ class _ConsoleScreenState extends State<ConsoleScreen> {
         separatorBuilder: (_, _) => const SizedBox(width: 4),
         itemBuilder: (_, i) {
           final cmd = _quickCmds[i];
-          return ActionChip(
-            label: Text(cmd),
-            onPressed: () => _send(cmd),
-          );
+          return ActionChip(label: Text(cmd), onPressed: () => _send(cmd));
         },
       ),
     );

@@ -157,6 +157,39 @@ jobs:
           name: linux
           path: release/deauther-linux-x64.tar.gz
 
+  # ─── Flutter Windows desktop ───────────────────────────────────────────────
+  windows:
+    name: Windows desktop
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build Windows release
+        working-directory: flutter
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Compress-Archive `
+            -Path 'flutter/build/windows/x64/runner/Release/*' `
+            -DestinationPath 'release/deauther-windows-x64.zip' `
+            -CompressionLevel Optimal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: release/deauther-windows-x64.zip
+
   # ─── Refresh merged bin on flasher branch (web flasher backend) ────────────
   publish-flasher:
     name: Update web flasher
@@ -189,7 +222,7 @@ jobs:
   # ─── Publish GitHub Release with all artifacts ─────────────────────────────
   release:
     name: Publish release
-    needs: [firmware, android, linux]
+    needs: [firmware, android, linux, windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -205,6 +238,7 @@ jobs:
           mv artifacts/firmware/esp32c5-deauther-firmware.zip release/
           mv artifacts/android/deauther-android.apk           release/
           mv artifacts/linux/deauther-linux-x64.tar.gz        release/
+          mv artifacts/windows/deauther-windows-x64.zip       release/
           ls -la release/
 
       - name: Generate SHA256 checksums
@@ -225,6 +259,7 @@ jobs:
             | `esp32c5-deauther-firmware.zip` | ESP32-C5 firmware bundle (bootloader + partition table + app + flash command). Flash with `esptool` or [esptool-js web flasher](https://espressif.github.io/esptool-js/). |
             | `deauther-android.apk` | Android app — universal APK for all CPU architectures (arm64, armv7, x86_64). |
             | `deauther-linux-x64.tar.gz` | Linux desktop binary. Extract and run `./deauther`. |
+            | `deauther-windows-x64.zip` | Windows 11 x64 portable app. Extract the complete folder and run `esp32_c5_controller.exe`. |
             | `SHA256SUMS` | Checksums for all of the above. |
 
             > ⚠️ **Authorized testing only.** This software is published for

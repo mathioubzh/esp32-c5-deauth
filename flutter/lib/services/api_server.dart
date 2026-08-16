@@ -65,15 +65,17 @@ class ApiServer {
         case 'GET /aps':
           _ok(req, {
             'aps': ctrl.aps
-                .map((a) => {
-                      'idx': a.idx,
-                      'channel': a.channel,
-                      'band': a.is5ghz ? '5GHz' : '2.4GHz',
-                      'rssi': a.rssi,
-                      'bssid': a.bssid,
-                      'ssid': a.ssid,
-                    })
-                .toList()
+                .map(
+                  (a) => {
+                    'idx': a.idx,
+                    'channel': a.channel,
+                    'band': a.is5ghz ? '5GHz' : '2.4GHz',
+                    'rssi': a.rssi,
+                    'bssid': a.bssid,
+                    'ssid': a.ssid,
+                  },
+                )
+                .toList(),
           });
         case 'GET /log':
           _ok(req, {'log': ctrl.rawLog});
@@ -108,13 +110,13 @@ class ApiServer {
   }
 
   Map<String, dynamic> _deviceJson(DeviceController ctrl) => {
-        'connected': true,
-        'attacking': ctrl.attacking,
-        'attackMode': ctrl.attackMode,
-        'scanning': ctrl.scanning,
-        'selectedIdxs': ctrl.selectedIdxs.toList(),
-        'apCount': ctrl.aps.length,
-      };
+    'connected': true,
+    'attacking': ctrl.attacking,
+    'attackMode': ctrl.attackMode,
+    'scanning': ctrl.scanning,
+    'selectedIdxs': ctrl.selectedIdxs.toList(),
+    'apCount': ctrl.aps.length,
+  };
 
   Future<String> _readBody(HttpRequest req) async {
     final bytes = await req.fold<List<int>>([], (a, b) => a..addAll(b));

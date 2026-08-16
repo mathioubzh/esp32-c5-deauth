@@ -18,8 +18,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _portCtrl =
-        TextEditingController(text: '${context.read<Settings>().apiPort}');
+    _portCtrl = TextEditingController(
+      text: '${context.read<Settings>().apiPort}',
+    );
   }
 
   @override
@@ -33,9 +34,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final api = context.read<ApiServer>();
     final port = int.tryParse(_portCtrl.text);
     if (port == null || port < 1024 || port > 65535) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Port must be 1024–65535')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Port must be 1024–65535')));
       return;
     }
     await settings.setApiPort(port);
@@ -53,15 +54,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           // ── API server ─────────────────────────────────────────────
-          const Text('HTTP API',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const Text(
+            'HTTP API',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Enable API server'),
-            subtitle: Text(settings.apiEnabled
-                ? 'Listening on 127.0.0.1:${settings.apiPort}'
-                : 'Disabled'),
+            subtitle: Text(
+              settings.apiEnabled
+                  ? 'Listening on 127.0.0.1:${settings.apiPort}'
+                  : 'Disabled',
+            ),
             value: settings.apiEnabled,
             onChanged: (v) async {
               await settings.setApiEnabled(v);
@@ -102,8 +107,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 24),
             const Divider(),
             const SizedBox(height: 8),
-            const Text('Endpoints',
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text(
+              'Endpoints',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             _ep('GET', '/', 'Health check / connected status'),
             _ep('GET', '/device', 'Full device state (JSON)'),
@@ -123,29 +130,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final color = method == 'GET' ? Colors.teal : Colors.orange;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(children: [
-        Container(
-          width: 46,
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          decoration: BoxDecoration(
-            color: color.withAlpha(40),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: color.withAlpha(120)),
-          ),
-          child: Text(method,
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            decoration: BoxDecoration(
+              color: color.withAlpha(40),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: color.withAlpha(120)),
+            ),
+            child: Text(
+              method,
               textAlign: TextAlign.center,
               style: TextStyle(
-                  color: color, fontSize: 11, fontWeight: FontWeight.bold)),
-        ),
-        const SizedBox(width: 8),
-        Text(path,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
-        const SizedBox(width: 8),
-        Expanded(
-            child: Text(desc,
-                style:
-                    const TextStyle(color: Colors.grey, fontSize: 12))),
-      ]),
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            path,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              desc,
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

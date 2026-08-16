@@ -1,0 +1,52 @@
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/windows-port
+    paths:
+      - flutter/**
+      - .github/workflows/windows.yml
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows 11 x64 portable app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Analyse and test
+        working-directory: flutter
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: Build release
+        working-directory: flutter
+        run: |
+          flutter config --enable-windows-desktop
+          flutter build windows --release
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path 'flutter/build/windows/x64/runner/Release/*' `
+            -DestinationPath 'deauther-windows-x64.zip' `
+            -CompressionLevel Optimal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deauther-windows-x64
+          path: deauther-windows-x64.zip
+          if-no-files-found: error

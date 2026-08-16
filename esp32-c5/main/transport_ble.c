@@ -1,9 +1,13 @@
 /* Stub when CONFIG_BT_ENABLED=n. Full implementation in git. */
 #include "sdkconfig.h"
 #include "transport_ble.h"
+#include "io.h"
 
 #ifndef CONFIG_BT_ENABLED
-void transport_ble_init(void) {}
+void transport_ble_init(void)
+{
+    io_log("ble: disabled at build time (CONFIG_BT_ENABLED=n)\r\n");
+}
 uint32_t transport_ble_connected_count(void) { return 0; }
 #else
 /* Full implementation below */
@@ -25,7 +29,6 @@ uint32_t transport_ble_connected_count(void) { return 0; }
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
-#include "io.h"
 #include "cli.h"
 
 static const char *TAG = "ble";
@@ -147,7 +150,11 @@ static void start_advertising(void)
     fields.name_len = strlen(name);
     fields.name_is_complete = 1;
     int rc = ble_gap_adv_set_fields(&fields);
-    if (rc != 0) { ESP_LOGW(TAG, "adv_set_fields rc=%d", rc); return; }
+    if (rc != 0) {
+        ESP_LOGW(TAG, "adv_set_fields rc=%d", rc);
+        io_log("ble: adv_set_fields rc=%d\r\n", rc);
+        return;
+    }
 
     /* Put the 128-bit NUS UUID in the scan response to stay within the
      * 31-byte advertisement limit (flags 3B + name 18B = 21B). */
@@ -156,7 +163,10 @@ static void start_advertising(void)
     rsp.num_uuids128 = 1;
     rsp.uuids128_is_complete = 1;
     rc = ble_gap_adv_rsp_set_fields(&rsp);
-    if (rc != 0) ESP_LOGW(TAG, "adv_rsp_set_fields rc=%d", rc);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "adv_rsp_set_fields rc=%d", rc);
+        io_log("ble: adv_rsp_set_fields rc=%d\r\n", rc);
+    }
 
     struct ble_gap_adv_params adv = {0};
     adv.conn_mode = BLE_GAP_CONN_MODE_UND;
@@ -166,10 +176,12 @@ static void start_advertising(void)
     rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &adv, gap_event_cb, NULL);
     if (rc == 0 || rc == BLE_HS_EALREADY) {
         ESP_LOGI(TAG, "advertising as ESP32C5-Deauther");
+        io_log("ble: advertising as ESP32C5-Deauther\r\n");
     } else {
         /* Stack not ready yet (e.g. BLE_HS_EBUSY right after disconnect).
          * Retry from the host event queue after 200 ms. */
         ESP_LOGW(TAG, "adv_start rc=%d, retry in 200 ms", rc);
+        io_log("ble: adv_start rc=%d, retry in 200 ms\r\n", rc);
         ble_npl_callout_reset(&s_adv_callout,
                               ble_npl_time_ms_to_ticks32(200));
     }
@@ -249,7 +261,12 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 static void on_sync(void)
 {
     int rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
-    if (rc != 0) { ESP_LOGE(TAG, "addr_infer rc=%d", rc); return; }
+    if (rc != 0) {
+        ESP_LOGE(TAG, "addr_infer rc=%d", rc);
+        io_log("ble: host sync addr_infer rc=%d\r\n", rc);
+        return;
+    }
+    io_log("ble: host synced, own_addr_type=%u\r\n", s_own_addr_type);
     for (int i = 0; i < BLE_MAX_CONN; i++) {
         s_conn_handles[i]   = BLE_HS_CONN_HANDLE_NONE;
         s_notify_enabled[i] = false;
@@ -264,6 +281,7 @@ static void on_sync(void)
 static void on_reset(int reason)
 {
     ESP_LOGW(TAG, "reset: %d — restarting advertising in 500 ms", reason);
+    io_log("ble: host reset reason=%d, retry in 500 ms\r\n", reason);
     for (int i = 0; i < BLE_MAX_CONN; i++) {
         s_conn_handles[i]   = BLE_HS_CONN_HANDLE_NONE;
         s_notify_enabled[i] = false;

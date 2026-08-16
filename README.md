@@ -12,7 +12,7 @@ are included in this repo:
 | Front-end | Path | Notes |
 |-----------|------|-------|
 | ESP32-C5 firmware | `esp32-c5/` | The radio. ESP-IDF project for the Seeed XIAO ESP32-C5. |
-| Flutter app | `flutter/` | Android / Linux desktop. Full-featured (whitelist, blacklist, nuke, console). |
+| Flutter app | `flutter/` | Android / Linux / Windows desktop. Full-featured (whitelist, blacklist, nuke, console). |
 | Garmin watch app | `garmin/` | Connect IQ app for the Fenix 7 series. Minimal: scan → list networks → deauth. |
 
 The radio and the controllers speak the Nordic UART Service (NUS) BLE
@@ -72,8 +72,8 @@ points at the firmware in this repo. Hit *Connect*, pick the serial
 port for the XIAO, then *Flash* — the merged binary is written at
 offset `0x0000`, no manual address juggling. Total time: under a minute.
 
-When the device is running, install the Android APK or Linux desktop
-app below to control it over BLE.
+When the device is running, install the Android, Linux, or Windows app
+below to control it over BLE.
 
 ---
 
@@ -88,6 +88,7 @@ page for every tagged version. No toolchain required:
 | `esp32c5-deauther-firmware.zip` | ESP32-C5 firmware bundle. Prefer the [browser flasher above](#quick-flash-browser-no-install); the zip is for offline / `esptool` users. |
 | `deauther-android.apk` | Android phones — single APK that runs on all CPU architectures (arm64, armv7, x86_64). |
 | `deauther-linux-x64.tar.gz` | Linux desktop. Extract and run `./deauther`. |
+| `deauther-windows-x64.zip` | Windows 11 x64 portable app. Extract the complete folder and run `esp32_c5_controller.exe`. |
 | `SHA256SUMS` | Checksums to verify the downloads |
 
 The Garmin watch app is not currently in the release bundle — it has to
@@ -102,12 +103,14 @@ key (see `garmin/run-fenix7pro.sh`).
   should work; only the on-board LED GPIO would need adjustment in
   `esp32-c5/main/led.c`.
 - USB-C cable (data, not charge-only) for flashing.
+- A Bluetooth Low Energy 4.0+ adapter for the desktop controllers.
 - (Optional) Garmin Fenix 7 family watch.
 
-## Build from source (Ubuntu 22.04 / 24.04)
+## Build from source
 
-Tested on a clean Ubuntu install. Each component can be built
-independently — install only the toolchain you need.
+Each component can be built independently — install only the toolchain
+you need. Firmware, Android, and Linux instructions target Ubuntu
+22.04/24.04; the Windows controller is built natively on Windows 11.
 
 ### ESP32-C5 firmware
 
@@ -171,6 +174,23 @@ ls build/app/outputs/flutter-apk/app-release.apk
 Install on a phone with `adb install` (USB debugging enabled) or by
 copying the `.apk` to the phone and tapping it.
 
+### Flutter — Windows 11 x64
+
+Install the stable [Flutter SDK](https://docs.flutter.dev/get-started/install/windows/desktop)
+and Visual Studio 2022 with the **Desktop development with C++** workload
+and a Windows 10/11 SDK. Then open Command Prompt in the `flutter` folder:
+
+```bat
+flutter doctor -v
+build_windows.bat
+```
+
+The script builds the release and creates
+`deauther-windows-x64.zip` in the repository root. Extract the whole ZIP
+(the DLLs and `data` folder must stay beside the executable), then run
+`esp32_c5_controller.exe`. See [`WINDOWS.md`](WINDOWS.md) for detailed
+steps and troubleshooting.
+
 ### Flutter — Linux desktop
 
 ```sh
@@ -223,6 +243,7 @@ the firmware.
 ├── garmin/          # Connect IQ watch app (Monkey C)
 ├── inspirations/    # Reference implementations from related projects
 ├── specs.md         # XIAO ESP32-C5 hardware reference
+├── WINDOWS.md       # Windows 11 build and usage guide
 ├── LICENSE          # Apache 2.0
 └── NOTICE           # Third-party attributions
 ```
