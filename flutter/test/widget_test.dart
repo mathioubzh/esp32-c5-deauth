@@ -20,6 +20,10 @@ void main() {
     await tester.pump();
     expect(find.text('ESP32-C5 Deauther'), findsOneWidget);
 
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    expect(find.text('Open diagnostic log'), findsOneWidget);
+
     await tester.pumpWidget(const SizedBox.shrink());
     api.dispose();
     settings.dispose();

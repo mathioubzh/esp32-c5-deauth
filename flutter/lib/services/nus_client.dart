@@ -11,6 +11,8 @@ import 'dart:io' show Platform;
 
 import 'package:universal_ble/universal_ble.dart';
 
+import 'app_logger.dart';
+
 class NusUuids {
   static const service = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   static const rx = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
@@ -64,11 +66,13 @@ class NusConnection {
 }
 
 class NusClient {
+  final AppLogger _logger = AppLogger.instance;
   StreamSubscription<BleDevice>? _scanSub;
   StreamController<List<BleDevice>>? _scanController;
   Timer? _scanTimer;
   final Map<String, BleDevice> _scanResults = {};
   final Set<String> _seenDeviceIds = {};
+  final Map<String, String> _advertisementSignatures = {};
 
   /// Number of distinct BLE peripherals reported by the operating system in
   /// the current scan, including devices that do not look like the controller.
@@ -88,9 +92,16 @@ class NusClient {
     _scanController = controller;
     _scanResults.clear();
     _seenDeviceIds.clear();
+    _advertisementSignatures.clear();
+    _logger.info('BLE scan requested; timeout=${timeout.inSeconds}s');
 
     void addDevice(BleDevice device) {
       final firstSighting = _seenDeviceIds.add(device.deviceId);
+      final signature = _advertisementSignature(device);
+      if (firstSighting || _advertisementSignatures[device.deviceId] != signature) {
+        _advertisementSignatures[device.deviceId] = signature;
+        _logger.info('BLE advertisement: ${_describeDevice(device)}');
+      }
       if (looksLikeController(device) ||
           (Platform.isWindows && _hasNoUsefulName(device))) {
         _scanResults[device.deviceId] = device;
@@ -106,6 +117,7 @@ class NusClient {
     _scanSub = UniversalBle.scanStream.listen(
       addDevice,
       onError: (Object error, StackTrace stackTrace) {
+        _logger.error('BLE scan stream failed', error, stackTrace);
         if (!controller.isClosed) controller.addError(error, stackTrace);
         unawaited(stopScan());
       },
@@ -121,10 +133,19 @@ class NusClient {
           final systemDevices = await UniversalBle.getSystemDevices(
             withServices: const [NusUuids.service],
           );
+          _logger.info(
+            'Windows NUS system-device query returned '
+            '${systemDevices.length} device(s)',
+          );
           for (final device in systemDevices) {
             addDevice(device);
           }
-        } catch (_) {
+        } catch (error, stackTrace) {
+          _logger.error(
+            'Windows NUS system-device query failed',
+            error,
+            stackTrace,
+          );
           // A normal advertisement scan can still discover the controller.
         }
       }
@@ -140,7 +161,9 @@ class NusClient {
               )
             : null,
       );
-    } catch (_) {
+      _logger.info('Platform BLE scan started');
+    } catch (error, stackTrace) {
+      _logger.error('Unable to start platform BLE scan', error, stackTrace);
       await _closeScan(stopPlatform: false);
       rethrow;
     }
@@ -157,6 +180,7 @@ class NusClient {
 
     final subscription = _scanSub;
     final controller = _scanController;
+    final hadActiveScan = subscription != null || controller != null;
     _scanSub = null;
     _scanController = null;
 
@@ -167,6 +191,12 @@ class NusClient {
     }
     await subscription?.cancel();
     if (controller != null && !controller.isClosed) await controller.close();
+    if (hadActiveScan) {
+      _logger.info(
+        'BLE scan stopped; seen=${_seenDeviceIds.length}, '
+        'candidates=${_scanResults.length}',
+      );
+    }
   }
 
   /// Whether the advertisement contains the expected NUS UUID or controller
@@ -191,26 +221,42 @@ class NusClient {
   Future<NusConnection> connect(BleDevice device) async {
     await stopScan();
 
-    if (await device.isConnected) {
+    _logger.info('Connection attempt: ${_describeDevice(device)}');
+
+    final alreadyConnected = await device.isConnected;
+    _logger.info('Initial connected state: $alreadyConnected');
+    if (alreadyConnected) {
       try {
+        _logger.info('Disconnecting stale GATT session');
         await device.disconnect(timeout: const Duration(seconds: 3));
-      } catch (_) {}
+      } catch (error, stackTrace) {
+        _logger.error('Stale-session disconnect failed', error, stackTrace);
+      }
       await _waitForConnection(device, connected: false);
     }
 
+    _logger.info('Calling BLE connect (timeout=12s, autoConnect=false)');
     await device.connect(
       timeout: const Duration(seconds: 12),
       autoConnect: false,
     );
+    _logger.info('BLE connect completed');
 
     try {
       // A larger MTU reduces notification fragmentation. Unsupported platforms
       // safely ignore or reject this best-effort request.
       try {
-        await device.requestMtu(247);
-      } catch (_) {}
+        final mtu = await device.requestMtu(247);
+        _logger.info('Effective MTU/PDU request result: $mtu');
+      } catch (error) {
+        _logger.warning('MTU request was not available: $error');
+      }
 
       final services = await device.discoverServices();
+      _logger.info(
+        'GATT discovery returned ${services.length} service(s):\n'
+        '${_describeServices(services)}',
+      );
       final service = services.firstWhere(
         (candidate) =>
             BleUuidParser.compareStrings(candidate.uuid, NusUuids.service),
@@ -232,8 +278,10 @@ class NusClient {
           ? tx.notifications
           : tx.indications;
       await txSubscription.subscribe();
+      _logger.info('Subscribed to NUS TX notifications/indications');
 
       final incoming = tx.onValueReceived.map((bytes) {
+        _logger.info('NUS RX ${bytes.length} byte(s): ${_hex(bytes)}');
         try {
           return utf8.decode(bytes, allowMalformed: true);
         } catch (_) {
@@ -244,6 +292,7 @@ class NusClient {
       final disconnectedCompleter = Completer<void>();
       late StreamSubscription<bool> stateSub;
       stateSub = device.connectionStream.listen((connected) {
+        _logger.info('BLE connection state changed: connected=$connected');
         if (!connected && !disconnectedCompleter.isCompleted) {
           disconnectedCompleter.complete();
           unawaited(stateSub.cancel());
@@ -251,12 +300,17 @@ class NusClient {
       });
 
       Future<void> doDisconnect() async {
+        _logger.info('Disconnect requested by application');
         try {
           await txSubscription.unsubscribe();
-        } catch (_) {}
+        } catch (error) {
+          _logger.warning('NUS unsubscribe failed: $error');
+        }
         try {
           await device.disconnect(timeout: const Duration(seconds: 3));
-        } catch (_) {}
+        } catch (error) {
+          _logger.warning('BLE disconnect failed: $error');
+        }
         try {
           await _waitForConnection(device, connected: false);
         } catch (_) {}
@@ -274,6 +328,7 @@ class NusClient {
         doDisconnect: doDisconnect,
       );
     } catch (error, stackTrace) {
+      _logger.error('Connection or GATT discovery failed', error, stackTrace);
       // Do not leave a half-open Windows GATT session when service discovery
       // or notification setup fails.
       try {
@@ -282,6 +337,63 @@ class NusClient {
       Error.throwWithStackTrace(error, stackTrace);
     }
   }
+
+  String _advertisementSignature(BleDevice device) {
+    return <String>[
+      '${device.name}',
+      '${device.rawName}',
+      '${device.paired}',
+      '${device.isSystemDevice}',
+      device.services.join(','),
+      device.manufacturerDataList
+          .map((data) => '${data.companyIdRadix16}:${data.payloadRadix16}')
+          .join(','),
+      device.serviceData.entries
+          .map((entry) => '${entry.key}:${_hex(entry.value)}')
+          .join(','),
+    ].join('|');
+  }
+
+  String _describeDevice(BleDevice device) {
+    final manufacturerData = device.manufacturerDataList.isEmpty
+        ? 'none'
+        : device.manufacturerDataList
+              .map(
+                (data) =>
+                    'company=0x${data.companyIdRadix16},payload=${data.payloadRadix16}',
+              )
+              .join('; ');
+    final serviceData = device.serviceData.isEmpty
+        ? 'none'
+        : device.serviceData.entries
+              .map((entry) => '${entry.key}=${_hex(entry.value)}')
+              .join('; ');
+    return 'id=${device.deviceId}, name=${device.name ?? '<null>'}, '
+        'rawName=${device.rawName ?? '<null>'}, rssi=${device.rssi}, '
+        'paired=${device.paired}, system=${device.isSystemDevice}, '
+        'timestamp=${device.timestamp}, services=${device.services}, '
+        'manufacturer={$manufacturerData}, serviceData={$serviceData}';
+  }
+
+  String _describeServices(List<BleService> services) {
+    if (services.isEmpty) return '  <no services>';
+    return services.map((service) {
+      final characteristics = service.characteristics.isEmpty
+          ? '    <no characteristics>'
+          : service.characteristics
+                .map(
+                  (characteristic) =>
+                      '    characteristic=${characteristic.uuid} '
+                      'properties=${characteristic.properties.map((p) => p.name).toList()}',
+                )
+                .join('\n');
+      return '  service=${service.uuid}\n$characteristics';
+    }).join('\n');
+  }
+
+  String _hex(Iterable<int> bytes) => bytes
+      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+      .join();
 
   Future<void> _waitForConnection(
     BleDevice device, {

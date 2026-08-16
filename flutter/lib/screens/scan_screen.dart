@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:universal_ble/universal_ble.dart';
 
 import '../services/api_server.dart';
+import '../services/app_logger.dart';
 import '../services/device_controller.dart';
 import '../services/nus_client.dart';
 import 'device_screen.dart';
@@ -22,6 +23,7 @@ class ScanScreen extends StatefulWidget {
 }
 
 class _ScanScreenState extends State<ScanScreen> {
+  final AppLogger _logger = AppLogger.instance;
   final NusClient _client = NusClient();
   StreamSubscription<List<BleDevice>>? _resultsSub;
   StreamSubscription<AvailabilityState>? _adapterSub;
@@ -37,8 +39,10 @@ class _ScanScreenState extends State<ScanScreen> {
   void initState() {
     super.initState();
     if (!widget.autoStart) return;
+    _logger.info('Scan screen initialized');
     _adapterSub = UniversalBle.availabilityStream.listen(
       (state) {
+        _logger.info('Bluetooth availability changed: $state');
         if (state == AvailabilityState.poweredOn &&
             !_scanning &&
             !_connecting &&
@@ -47,6 +51,7 @@ class _ScanScreenState extends State<ScanScreen> {
         }
       },
       onError: (Object error) {
+        _logger.error('Bluetooth availability stream failed', error);
         if (mounted) setState(() => _error = 'Bluetooth error: $error');
       },
     );
@@ -74,8 +79,10 @@ class _ScanScreenState extends State<ScanScreen> {
   Future<bool> _ensurePermissions() async {
     try {
       await UniversalBle.requestPermissions(withAndroidFineLocation: false);
+      _logger.info('Bluetooth permission request completed');
       return true;
-    } catch (error) {
+    } catch (error, stackTrace) {
+      _logger.error('Bluetooth permission request failed', error, stackTrace);
       if (mounted) {
         setState(() => _error = 'Bluetooth permissions denied: $error');
       }
@@ -87,7 +94,9 @@ class _ScanScreenState extends State<ScanScreen> {
     AvailabilityState state;
     try {
       state = await UniversalBle.getBluetoothAvailabilityState();
-    } catch (error) {
+      _logger.info('Bluetooth availability at scan start: $state');
+    } catch (error, stackTrace) {
+      _logger.error('Unable to query Bluetooth availability', error, stackTrace);
       if (mounted) setState(() => _error = 'Bluetooth unavailable: $error');
       return false;
     }
@@ -96,11 +105,14 @@ class _ScanScreenState extends State<ScanScreen> {
 
     if (Platform.isAndroid || Platform.isWindows || Platform.isLinux) {
       try {
+        _logger.info('Requesting Bluetooth enable');
         await UniversalBle.enableBluetooth();
         // The availability listener starts scanning after the radio reports it
         // is fully powered on.
         return false;
-      } catch (_) {}
+      } catch (error, stackTrace) {
+        _logger.error('Bluetooth enable request failed', error, stackTrace);
+      }
     }
 
     if (mounted) {
@@ -127,6 +139,7 @@ class _ScanScreenState extends State<ScanScreen> {
       _seenDeviceCount = 0;
       _scanning = true;
     });
+    _logger.info('Starting scan cycle');
 
     try {
       final stream = await _client.scan();
@@ -148,11 +161,13 @@ class _ScanScreenState extends State<ScanScreen> {
           }
         },
         onError: (Object error) {
+          _logger.error('Scan result stream error', error);
           if (mounted) setState(() => _error = 'Scan error: $error');
         },
         onDone: _onScanEnded,
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
+      _logger.error('Scan cycle failed', error, stackTrace);
       if (!mounted) return;
       setState(() {
         _scanning = false;
@@ -163,6 +178,7 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   void _onScanEnded() {
+    _logger.info('Scan result stream ended');
     if (!mounted) return;
     setState(() => _scanning = false);
     _scheduleRescan();
@@ -181,6 +197,10 @@ class _ScanScreenState extends State<ScanScreen> {
   Future<void> _connect(BleDevice device) async {
     if (_connecting) return;
     _rescanEnabled = false;
+    _logger.info(
+      'User selected device ${device.deviceId} '
+      '(name=${device.name}, rssi=${device.rssi})',
+    );
     _rescanTimer?.cancel();
     await _client.stopScan();
     if (!mounted) return;
@@ -222,7 +242,8 @@ class _ScanScreenState extends State<ScanScreen> {
       api.detach();
       apiAttached = false;
       await controller.conn.disconnect();
-    } catch (error) {
+    } catch (error, stackTrace) {
+      _logger.error('UI connection attempt failed', error, stackTrace);
       if (!mounted) return;
       if (dialogVisible && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
@@ -239,6 +260,22 @@ class _ScanScreenState extends State<ScanScreen> {
         await Future<void>.delayed(const Duration(seconds: 2));
         if (mounted) unawaited(_maybeStartScan());
       }
+    }
+  }
+
+  Future<void> _openDiagnosticLog() async {
+    try {
+      final path = await _logger.revealLog();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Diagnostic log: $path')),
+      );
+    } catch (error, stackTrace) {
+      _logger.error('Unable to open diagnostic log', error, stackTrace);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to open diagnostic log: $error')),
+      );
     }
   }
 
@@ -271,10 +308,27 @@ class _ScanScreenState extends State<ScanScreen> {
                     MaterialPageRoute(builder: (_) => const SettingsScreen()),
                   ),
                 );
+              } else if (value == 'log') {
+                unawaited(_openDiagnosticLog());
               }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'settings', child: Text('Settings')),
+            itemBuilder: (_) => const <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(
+                value: 'log',
+                child: ListTile(
+                  leading: Icon(Icons.description_outlined),
+                  title: Text('Open diagnostic log'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'settings',
+                child: ListTile(
+                  leading: Icon(Icons.settings_outlined),
+                  title: Text('Settings'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
             ],
           ),
         ],
