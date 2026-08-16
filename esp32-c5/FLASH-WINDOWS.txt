@@ -1,0 +1,38 @@
+ESP32-C5 DEAUTHER - WINDOWS RECOVERY
+===================================
+
+This bundle repairs a board which repeatedly prints "invalid header".
+It contains a complete merged image: bootloader, partition table and app.
+
+Files
+-----
+esp32c5-deauther-merged.bin  Complete image to flash at address 0x0000
+Flash-Windows.bat            Guided erase and flash script
+SHA256SUMS.txt               File integrity checks
+
+Procedure
+---------
+1. Extract the complete ZIP into a new folder.
+2. Close MobaXterm and every program using the ESP32 serial port.
+3. Double-click Flash-Windows.bat.
+4. Enter the COM port shown by the script, for example COM7.
+5. Follow the BOOT/RESET instructions displayed by the script.
+6. Wait for "FLASH COMPLETED AND VERIFIED".
+7. If necessary, press RESET once.
+8. Reopen MobaXterm on the same COM port at 115200 baud.
+
+Expected Bluetooth startup log
+------------------------------
+ble: init
+ble: nimble_port_init rc=0
+ble: count_cfg rc=0
+ble: add_svcs rc=0
+ble: host task started, waiting for sync
+ble: host synced, own_addr_type=...
+ble: advertising as ESP32C5-Deauther
+
+The script installs or updates the official Espressif esptool through
+Python. Python 3 and an internet connection are therefore required.
+
+Use the wireless security-testing functions only on networks you own or
+for which you have explicit written authorization.

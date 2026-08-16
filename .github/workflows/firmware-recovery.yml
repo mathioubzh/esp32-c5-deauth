@@ -1,0 +1,61 @@
+name: Build ESP32-C5 recovery firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/windows-port
+    paths:
+      - esp32-c5/**
+      - .github/workflows/firmware-recovery.yml
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: ESP32-C5 merged recovery image
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply patched Wi-Fi library
+        run: |
+          cp esp32-c5/patched_libnet/libnet80211.a \
+            "$IDF_PATH/components/esp_wifi/lib/esp32c5/libnet80211.a"
+
+      - name: Build firmware with Bluetooth diagnostics
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cd esp32-c5
+          rm -rf build sdkconfig
+          idf.py set-target esp32c5
+          idf.py build
+
+      - name: Build merged recovery bundle
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          mkdir -p release/ESP32-C5-Recovery
+          cd esp32-c5/build
+          esptool.py --chip esp32c5 merge_bin \
+            --output ../../release/ESP32-C5-Recovery/esp32c5-deauther-merged.bin \
+            --flash_mode dio --flash_size 2MB --flash_freq 40m \
+            0x2000 bootloader/bootloader.bin \
+            0x8000 partition_table/partition-table.bin \
+            0x10000 esp32c5_deauther.bin
+          cd ../..
+          cp esp32-c5/Flash-Windows.bat release/ESP32-C5-Recovery/
+          cp esp32-c5/FLASH-WINDOWS.txt release/ESP32-C5-Recovery/
+          cd release/ESP32-C5-Recovery
+          sha256sum esp32c5-deauther-merged.bin Flash-Windows.bat \
+            > SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32-c5-recovery
+          path: release/ESP32-C5-Recovery
+          if-no-files-found: error
