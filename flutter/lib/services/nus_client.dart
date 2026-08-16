@@ -91,7 +91,8 @@ class NusClient {
 
     void addDevice(BleDevice device) {
       final firstSighting = _seenDeviceIds.add(device.deviceId);
-      if (_looksLikeDevice(device)) {
+      if (looksLikeController(device) ||
+          (Platform.isWindows && _hasNoUsefulName(device))) {
         _scanResults[device.deviceId] = device;
       } else if (!firstSighting) {
         return;
@@ -168,7 +169,10 @@ class NusClient {
     if (controller != null && !controller.isClosed) await controller.close();
   }
 
-  bool _looksLikeDevice(BleDevice device) {
+  /// Whether the advertisement contains the expected NUS UUID or controller
+  /// name. Windows sometimes reports the same advertisement without either,
+  /// so unnamed devices are also shown as manual diagnostic candidates there.
+  bool looksLikeController(BleDevice device) {
     if (device.services.any(
       (uuid) => BleUuidParser.compareStrings(uuid, NusUuids.service),
     )) {
@@ -176,6 +180,11 @@ class NusClient {
     }
     final name = device.name?.toLowerCase() ?? '';
     return name.contains('deauther') || name.contains('esp32c5');
+  }
+
+  bool _hasNoUsefulName(BleDevice device) {
+    final name = device.name?.trim().toLowerCase() ?? '';
+    return name.isEmpty || name == 'unknown' || name == 'appareil inconnu';
   }
 
   /// Connects, discovers NUS and exposes a bidirectional text channel.

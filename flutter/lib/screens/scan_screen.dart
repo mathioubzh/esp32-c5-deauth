@@ -141,7 +141,9 @@ class _ScanScreenState extends State<ScanScreen> {
             _results = devices;
             _seenDeviceCount = _client.seenDeviceCount;
           });
-          if (devices.length == 1 && !_connecting) {
+          if (devices.length == 1 &&
+              _client.looksLikeController(devices.first) &&
+              !_connecting) {
             unawaited(_connect(devices.first));
           }
         },
@@ -325,16 +327,24 @@ class _ScanScreenState extends State<ScanScreen> {
   }
 
   Widget _resultTile(BleDevice device) {
-    final name = (device.name?.isNotEmpty ?? false)
+    final hasName = device.name?.trim().isNotEmpty ?? false;
+    final name = hasName
         ? device.name!
-        : '(unnamed)';
+        : 'Unknown BLE device — tap to test';
+    final recognised = _client.looksLikeController(device);
     return ListTile(
-      leading: const Icon(Icons.bluetooth),
+      leading: Icon(
+        Icons.bluetooth,
+        color: recognised ? Colors.green : null,
+      ),
       title: Text(name),
       subtitle: Text(
         '${device.deviceId}\n${device.rssi ?? '?'} dBm'
         '${device.isSystemDevice == true ? ' · Windows system device' : ''}',
       ),
+      trailing: recognised
+          ? const Icon(Icons.check_circle, color: Colors.green)
+          : const Icon(Icons.search),
       isThreeLine: true,
       onTap: () => unawaited(_connect(device)),
     );
